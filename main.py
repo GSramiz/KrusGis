@@ -6,13 +6,14 @@ from pprint import pprint
 import json
 
 def update_gee_links():
-    # 1. Инициализация GEE ee.Initialize()
- print("GEE успешно инициализирован")
+    # 1. Инициализация GEE
+    ee.Initialize()
+    print("GEE успешно инициализирован")
 
     # 2. Настройки
     CONFIG = {
-        "spreadsheet_id": "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY",
-        "sheet_name": "1945273513",  # ID вкладки
+        "spreadsheet_id": "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY",  # ID таблицы
+        "sheet_name": "1945273513",  # ID листа
         "geometry": ee.Geometry.Rectangle([30, 50, 180, 80]),  # Границы РФ
         "bands": ["B4", "B3", "B2"],  # RGB-каналы
         "min": 0,
@@ -64,9 +65,9 @@ def update_gee_links():
         data = sheet.get_all_values()
 
         for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
-            region, month_year, current_url = row[0], row[1], row[2]
+            month_year, current_url = row[0], row[1]
 
-            if region != "Вся РФ" or not month_year:
+            if not month_year:
                 continue
 
             try:
@@ -81,17 +82,17 @@ def update_gee_links():
                 if best_image:
                     url = generate_url(best_image)
                     if url:
-                        sheet.update_cell(row_idx, 3, url)  # Обновляем колонку C
+                        sheet.update_cell(row_idx, 2, url)  # Обновляем колонку B
                         print(f"✅ Обновлено: {month_year} (облачность {cloud_percent}%)")
                     else:
-                        sheet.update_cell(row_idx, 3, "Ошибка генерации URL")
+                        sheet.update_cell(row_idx, 2, "Ошибка генерации URL")
                 else:
-                    sheet.update_cell(row_idx, 3, "Нет снимков")
+                    sheet.update_cell(row_idx, 2, "Нет снимков")
                     print(f"⚠️ Нет подходящих снимков для {month_year}")
 
             except Exception as e:
                 print(f"❌ Ошибка обработки строки {row_idx}:", str(e))
-                sheet.update_cell(row_idx, 3, f"Ошибка: {str(e)}")
+                sheet.update_cell(row_idx, 2, f"Ошибка: {str(e)}")
 
     # Запуск обновления
     update_sheet()
