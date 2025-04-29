@@ -2,12 +2,14 @@ name: Update GEE Links
 
 on:
   schedule:
-    - cron: '0 */10 * * *'  # Каждые 10 часов
-  workflow_dispatch:  # Для ручного запуска
+    - cron: '0 */10 * * *'  # Каждые 10 часов (UTC)
+  workflow_dispatch:         # Для ручного запуска
 
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 30      # Лимит выполнения
+
     steps:
       - uses: actions/checkout@v4
       
@@ -19,9 +21,14 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          python -c "import ee; ee.Authenticate()" || true
+          pip install --upgrade google-auth-oauthlib
+      
+      - name: Set up GEE credentials
+        run: |
+          mkdir -p ~/.config/earthengine/
+          echo '${{ secrets.GEE_CREDENTIALS }}' > ~/.config/earthengine/credentials.json
       
       - name: Run script
         run: python main.py
         env:
-          GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}
+          G_SHEETS_KEY: ${{ secrets.G_SHEETS_KEY }}
