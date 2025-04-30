@@ -1,36 +1,92 @@
-name: Update GEE Links
+name: GEE Script Automation
 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: '0 */10 * * *'  # Запуск каждые 10 часов (UTC)
-  workflow_dispatch:         # Разрешить ручной запуск
+    - cron: '0 12 * * *' # Запуск ежедневно в 12:00 UTC
 
 jobs:
-  update:
+  run-script:
     runs-on: ubuntu-latest
-    timeout-minutes: 30      # Максимальное время выполнения
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install earthengine-api gspread oauth2client google-auth
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install earthengine-api gspread oauth2client
 
-      - name: Set up Earth Engine credentials
-        run: |
-          mkdir -p ~/.config/earthengine/
-          echo '${{ secrets.GEE_CREDENTIALS }}' > ~/.config/earthengine/credentials.json
-          echo "Earth Engine credentials configured"
+    - name: Verify GEE Credentials
+      run: |
+        echo "Проверка структуры GEE_CREDENTIALS..."
+        python -c "
+        import json, os
+        try:
+            creds = json.loads('${{ secrets.GEE_CREDENTIALS }}')
+            assert 'client_email' in creds, 'Отсутствует client_email'
+            assert 'private_key' in creds, 'Отсутствует private_key'
+            print('✅ Структура credentials верна')
+        except Exception as e:
+            print(f'❌ Ошибка в credentials: {str(e)}')
+            exit(1)
+        "
 
-      - name: Run script
-        run: python main.py
-        env:
-          GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}  # Используем один ключ для всего
+    - name: Test Google Sheets Access
+      run: |
+        echo "Проверка доступа к Google Sheets..."
+        python -c "
+        import gspread, json, os
+        from oauth2client.service_account import ServiceAccountCredentials
+        
+        try:
+            creds = json.loads('${{ secrets.GEE_CREDENTIALS }}')
+            scope = ['https://www.googleapis.com/auth/spreadsheets']
+            client = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(creds, scope))
+            print('✅ Успешная авторизация в Google Sheets')
+            
+            # Тест открытия таблицы
+            SPREADSHEET_ID = '1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY'
+            sheet = client.open_by_key(SPREADSHEET_ID).worksheet('1945273513')
+            print('✅ Успешный доступ к таблице')
+            
+            # Тест записи
+            sheet.update_cell(1, 1, 'Тест из GitHub Actions')
+            print('✅ Тестовая запись выполнена')
+        except Exception as e:
+            print(f'❌ Ошибка доступа: {str(e)}')
+            exit(1)
+        "
+
+    - name: Run Main Script
+      run: |
+        echo "Запуск основного скрипта..."
+        python main.py
+      env:
+        GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}
+
+    - name: Verify Output
+      run: |
+        echo "Проверка результатов выполнения..."
+        python -c "
+        import gspread, json
+        from oauth2client.service_account import ServiceAccountCredentials
+        
+        creds = json.loads('${{ secrets.GEE_CREDENTIALS }}')
+        scope = ['https://www.googleapis.com/auth/spreadsheets']
+        client = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(creds, scope))
+        
+        sheet = client.open_by_key('1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY').worksheet('1945273513')
+        test_cell = sheet.cell(1, 1).value
+        print(f'Значение в тестовой ячейке: {test_cell}')
+        
+        if test_cell != 'Тест из GitHub Actions':
+            print('❌ Тестовая запись не обнаружена')
+            exit(1)
+        "
