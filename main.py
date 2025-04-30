@@ -15,6 +15,7 @@ def initialize_services():
         credentials = ee.ServiceAccountCredentials(
             service_account_info['client_email'],
             key_data=json.dumps(service_account_info)
+        )
         ee.Initialize(credentials)
         print("✅ Earth Engine инициализирован")
 
@@ -25,6 +26,7 @@ def initialize_services():
         ]
         sheets_client = gspread.authorize(
             ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
+        )
         print("✅ Google Sheets авторизован")
         
         return sheets_client
