@@ -96,26 +96,25 @@ def generate_thumbnail_url(image, geometry, bands=['B4', 'B3', 'B2'], min=0, max
         log_error("generate_thumbnail_url", e)
         return None
 
-
 def update_sheet(sheets_client):
     try:
         print("\n📊 Начало обновления таблицы")
 
         config = {
             "spreadsheet_id": "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY",
-            "geometry": ee.Geometry.Rectangle([30, 50, 180, 80])
+            "sheet_name": "Sentinel-2 Покрытие",
+            "geometry": ee.Geometry.Rectangle([30, 50, 180, 80])  # при необходимости замени
         }
 
         print(f"Открываю таблицу {config['spreadsheet_id']}...")
         spreadsheet = sheets_client.open_by_key(config["spreadsheet_id"])
         print(f"✅ Таблица найдена: '{spreadsheet.title}'")
 
-        sheet_name = get_first_worksheet_title(spreadsheet)
-        print(f"📄 Используем лист: '{sheet_name}'")
-        worksheet = spreadsheet.worksheet(sheet_name)
+        worksheet = spreadsheet.worksheet(config["sheet_name"])
+        print(f"📄 Используем лист: '{worksheet.title}'")
 
         print("\n🧪 Выполняю тестовое обновление...")
-        worksheet.update_cell(1, 1, "Тест из GitHub Actions")
+        worksheet.update_cell(1, 2, "URL покрытия (авто)")
         print("✅ Тестовое обновление выполнено")
 
         print("\n📝 Обработка данных...")
@@ -125,16 +124,31 @@ def update_sheet(sheets_client):
             print("⚠️ Таблица пуста")
             return
 
-        for row_idx, row in enumerate(data[1:], start=2):
+        month_map = {
+            "Январь": "01", "Февраль": "02", "Март": "03", "Апрель": "04",
+            "Май": "05", "Июнь": "06", "Июль": "07", "Август": "08",
+            "Сентябрь": "09", "Октябрь": "10", "Ноябрь": "11", "Декабрь": "12"
+        }
+
+        for row_idx, row in enumerate(data[1:], start=2):  # со второй строки
             if not row[0]:
                 continue
 
             try:
-                month, year = row[0].split()
-                start_date = f"{year}-{month}-01"
+                parts = row[0].split()
+                if len(parts) != 2:
+                    raise ValueError(f"Неверный формат даты: '{row[0]}'")
+
+                month_ru, year = parts
+                month_num = month_map.get(month_ru.capitalize())
+
+                if not month_num:
+                    raise ValueError(f"Неизвестный месяц: '{month_ru}'")
+
+                start_date = f"{year}-{month_num}-01"
                 end_date = ee.Date(start_date).advance(1, 'month').format('YYYY-MM-dd').getInfo()
 
-                print(f"\n🔍 Обрабатываю {month} {year}...")
+                print(f"\n🔍 Обрабатываю {month_ru} {year}...")
                 best_image, cloud_percent = get_best_image(start_date, end_date, config["geometry"])
 
                 if best_image:
@@ -152,7 +166,6 @@ def update_sheet(sheets_client):
     except Exception as e:
         log_error("update_sheet", e)
         raise
-
 
 if __name__ == "__main__":
     try:
