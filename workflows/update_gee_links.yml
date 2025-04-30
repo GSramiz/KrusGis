@@ -1,16 +1,4 @@
-- name: Debug
-  run: |
-    echo "Проверка доступа к таблице..."
-    python -c "
-    import gspread
-    from oauth2client.service_account import ServiceAccountCredentials
-    creds = ${{ secrets.GEE_CREDENTIALS }}
-    scope = ['https://www.googleapis.com/auth/spreadsheets']
-    client = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(creds, scope))
-    sheet = client.open_by_key('1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY')
-    print(f'Успешный доступ к таблице: {sheet.title}')
-    "
-name: GEE Script Automation
+name: GEE Automation
 
 on:
   workflow_dispatch:
@@ -33,17 +21,27 @@ jobs:
       run: |
         pip install earthengine-api gspread oauth2client
 
-    - name: Authenticate GEE
+    - name: Authenticate Earth Engine
       run: |
         echo "${{ secrets.GEE_CREDENTIALS }}" > service_account.json
         python -c "
         import ee
         ee.Authenticate(service_account='service_account.json')
-        print('✅ Аутентификация GEE выполнена')
+        print('✅ Earth Engine authenticated')
+        "
+
+    - name: Verify Google Sheets Access
+      run: |
+        python -c "
+        import gspread
+        from oauth2client.service_account import ServiceAccountCredentials
+        creds = ${{ secrets.GEE_CREDENTIALS }}
+        scope = ['https://www.googleapis.com/auth/spreadsheets']
+        client = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(creds, scope))
+        print('✅ Google Sheets access verified')
         "
 
     - name: Run Main Script
       run: python main.py
       env:
         GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}
-        
