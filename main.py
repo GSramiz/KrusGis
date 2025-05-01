@@ -1,3 +1,4 @@
+# main.py (обновлённый)
 import ee
 import gspread
 import json
@@ -10,7 +11,6 @@ def log_error(context, error):
     print(f"\n❌ ОШИБКА в {context}:")
     print(f"Тип: {type(error).__name__}")
     print(f"Сообщение: {str(error)}")
-    print("Стек вызовов:")
     traceback.print_exc()
     print("=" * 50)
 
@@ -22,13 +22,7 @@ def initialize_services():
         if "GEE_CREDENTIALS" not in os.environ:
             raise ValueError("Отсутствует переменная GEE_CREDENTIALS")
 
-        try:
-            service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
-            for field in ['client_email', 'private_key', 'token_uri']:
-                if field not in service_account_info:
-                    raise ValueError(f"Отсутствует обязательное поле: {field}")
-        except json.JSONDecodeError as e:
-            raise ValueError("Невалидный JSON в GEE_CREDENTIALS") from e
+        service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
 
         credentials = ee.ServiceAccountCredentials(
             service_account_info['client_email'],
@@ -52,77 +46,12 @@ def initialize_services():
         raise
 
 
-def get_first_worksheet_title(spreadsheet):
-    return spreadsheet.worksheets()[0].title
-
-
-def get_best_image(start_date, end_date, geometry, max_clouds=30):
-    try:
-        print(f"\n🔍 Поиск снимка за период {start_date} - {end_date}")
-
-        collection = ee.ImageCollection('COPERNICUS/S2_SR') \
-            .filterDate(start_date, end_date) \
-            .filterBounds(geometry) \
-            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_clouds)) \
-            .sort('CLOUDY_PIXEL_PERCENTAGE')
-
-        if collection.size().getInfo() == 0:
-            print("⚠️ Нет подходящих снимков в указанный период")
-            return None, None
-
-        best_image = ee.Image(collection.first())
-        cloud_percent = best_image.get('CLOUDY_PIXEL_PERCENTAGE').getInfo()
-
-        print(f"🌤 Найден снимок с облачностью {cloud_percent}%")
-        return best_image, cloud_percent
-
-    except Exception as e:
-        log_error("get_best_image", e)
-        return None, None
-
-
-def generate_thumbnail_url(image, geometry, bands=['B4', 'B3', 'B2'], min=0, max=3000):
-    try:
-        print("\n🖼 Генерация URL превью...")
-        url = image.getThumbURL({
-            'bands': bands,
-            'min': min,
-            'max': max,
-            'region': geometry
-        })
-        print(f"✅ URL превью сгенерирован (длина: {len(url)} символов)")
-        return url
-    except Exception as e:
-        log_error("generate_thumbnail_url", e)
-        return None
-
 def update_sheet(sheets_client):
     try:
         print("\n📊 Начало обновления таблицы")
 
-        config = {
-            "spreadsheet_id": "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY",
-            "sheet_name": "Sentinel-2 Покрытие",
-            "geometry": ee.Geometry.Rectangle([30, 50, 180, 80])  # при необходимости замени
-        }
-
-        print(f"Открываю таблицу {config['spreadsheet_id']}...")
-        spreadsheet = sheets_client.open_by_key(config["spreadsheet_id"])
-        print(f"✅ Таблица найдена: '{spreadsheet.title}'")
-
-        worksheet = spreadsheet.worksheet(config["sheet_name"])
-        print(f"📄 Используем лист: '{worksheet.title}'")
-
-        print("\n🧪 Выполняю тестовое обновление...")
-        worksheet.update_cell(1, 2, "URL покрытия (авто)")
-        print("✅ Тестовое обновление выполнено")
-
-        print("\n📝 Обработка данных...")
-        data = worksheet.get_all_values()
-
-        if not data:
-            print("⚠️ Таблица пуста")
-            return
+        SPREADSHEET_ID = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
+        SHEET_NAME = "Sentinel-2 Покрытие"
 
         month_map = {
             "Январь": "01", "Февраль": "02", "Март": "03", "Апрель": "04",
@@ -130,42 +59,77 @@ def update_sheet(sheets_client):
             "Сентябрь": "09", "Октябрь": "10", "Ноябрь": "11", "Декабрь": "12"
         }
 
-        for row_idx, row in enumerate(data[1:], start=2):  # со второй строки
-            if not row[0]:
-                continue
+        sheet = sheets_client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+        data = sheet.get_all_values()
+
+        for row_idx, row in enumerate(data[1:], start=2):
+            region_name, period = row[:2]
 
             try:
-                parts = row[0].split()
-                if len(parts) != 2:
-                    raise ValueError(f"Неверный формат даты: '{row[0]}'")
+                month_rus, year = period.strip().split()
+                month = month_map.get(month_rus.capitalize())
+                if not month:
+                    raise ValueError(f"Неизвестный месяц: {month_rus}")
 
-                month_ru, year = parts
-                month_num = month_map.get(month_ru.capitalize())
+                start = f"{year}-{month}-01"
+                end = ee.Date(start).advance(1, 'month')
 
-                if not month_num:
-                    raise ValueError(f"Неизвестный месяц: '{month_ru}'")
+                region_geometry = get_region_geometry(region_name)
+                if region_geometry is None:
+                    raise ValueError("Геометрия региона не найдена")
 
-                start_date = f"{year}-{month_num}-01"
-                end_date = ee.Date(start_date).advance(1, 'month').format('YYYY-MM-dd').getInfo()
+                mosaic = create_smoothed_mosaic(start, end, region_geometry)
 
-                print(f"\n🔍 Обрабатываю {month_ru} {year}...")
-                best_image, cloud_percent = get_best_image(start_date, end_date, config["geometry"])
+                vis = {
+                    'bands': ['TCI_R', 'TCI_G', 'TCI_B'],
+                    'min': 0,
+                    'max': 255
+                }
+                map_info = mosaic.visualize(**vis).getMap()
+                xyz = f"https://earthengine.googleapis.com/map/{map_info['mapid']}/%7Bz%7D/%7Bx%7D/%7By%7D?token={map_info['token']}"
 
-                if best_image:
-                    url = generate_thumbnail_url(best_image, config["geometry"])
-                    worksheet.update_cell(row_idx, 2, url or "Ошибка генерации URL")
-                else:
-                    worksheet.update_cell(row_idx, 2, "Нет подходящих снимков")
+                sheet.update_cell(row_idx, 3, xyz)
 
             except Exception as e:
                 log_error(f"обработка строки {row_idx}", e)
-                worksheet.update_cell(row_idx, 2, f"Ошибка: {str(e)[:100]}")
+                sheet.update_cell(row_idx, 3, f"Ошибка: {str(e)[:100]}")
 
-        print("\n🎉 Таблица успешно обновлена")
+        print("\n✅ Обновление завершено")
 
     except Exception as e:
         log_error("update_sheet", e)
-        raise
+
+
+def get_region_geometry(name):
+    fc_gaul = ee.FeatureCollection("FAO/GAUL/2015/level1")
+    fc_alt = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017")
+    
+    region = fc_gaul.filter(ee.Filter.eq('ADM1_NAME', name)).geometry()
+    alt_region = fc_alt.filter(ee.Filter.eq('country_na', name)).geometry()
+
+    return ee.Algorithms.If(region.isDefined(), region, alt_region)
+
+
+def create_smoothed_mosaic(start_date, end_date, region):
+    vis_bands = ['TCI_R', 'TCI_G', 'TCI_B']
+
+    def mask_clouds(img):
+        scl = img.select("SCL")
+        cloud_classes = ee.List([3, 8, 9, 10])
+        mask = scl.remap(cloud_classes, ee.List.repeat(0, cloud_classes.length()), 1)
+        return img.updateMask(mask)
+
+    collection = ee.ImageCollection("COPERNICUS/S2_SR")\
+        .filterDate(start_date, end_date)\
+        .filterBounds(region)\
+        .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 60))\
+        .map(mask_clouds)\
+        .map(lambda img: img.select(vis_bands).resample('bicubic').copyProperties(img, img.propertyNames()))
+
+    mosaic = collection.mosaic().clip(region)
+    kernel = ee.Kernel.gaussian(radius=1.2, sigma=1.2, units='pixels', normalize=True)
+    return mosaic.convolve(kernel)
+
 
 if __name__ == "__main__":
     try:
@@ -173,8 +137,7 @@ if __name__ == "__main__":
         client = initialize_services()
         if client:
             update_sheet(client)
-        print("\n✅ Скрипт успешно завершен")
+        print("\n🏁 Скрипт завершён успешно")
     except Exception as e:
-        log_error("основной поток", e)
-        print("\n💥 Критическая ошибка - выполнение прервано")
-        exit(1)
+        log_error("main", e)
+        print("\n💥 Критическая ошибка")
