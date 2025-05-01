@@ -1,34 +1,36 @@
-name: GEE Automation
+name: Update GEE Links
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 12 * * *'  # каждый день в 12:00 UTC
+    - cron: '0 3 * * *'  # Запуск каждый день в 3:00 UTC (можно изменить)
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-    - name: Upgrade pip and install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    - name: Save GEE credentials to file
-      run: |
-        echo "${{ secrets.GEE_CREDENTIALS }}" > service_account.json
-      shell: bash
+      - name: 🔐 Set up GEE credentials
+        env:
+          GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}
+        run: |
+          echo "$GEE_CREDENTIALS" > gee_credentials.json
+          export GEE_CREDENTIALS="$(cat gee_credentials.json)"
 
-    - name: Run main script
-      run: python main.py
-      env:
-        GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}
+      - name: 🚀 Run main.py
+        env:
+          GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}
+        run: |
+          python main.py
