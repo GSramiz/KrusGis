@@ -23,13 +23,13 @@ jobs:
 
     - name: Write GEE credentials from secret
       run: |
-        echo "${{ secrets.GH_SECRET }}" | python -c 'import json,sys; d=json.load(sys.stdin); open("gee_service_account.json","w").write(json.dumps(d))'
+        echo "${{ secrets.GEE_CREDENTIALS }}" | python -c 'import json,sys; d=json.load(sys.stdin); open("credentials.json","w").write(json.dumps(d))'
 
     - name: Authenticate Earth Engine
       run: |
-        earthengine authenticate --quiet --service-account $(jq -r '.client_email' gee_service_account.json) --key-file gee_service_account.json
+        earthengine authenticate --quiet --service-account $(jq -r '.client_email' credentials.json) --key-file credentials.json
 
     - name: Run script
       env:
-        GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/gee_service_account.json
+        GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/credentials.json
       run: python main.py
