@@ -2,13 +2,19 @@ import ee
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import datetime
+import os
 
 # Авторизация Earth Engine
 ee.Initialize()
 
+# Используем путь из переменной окружения
+credentials_path = os.getenv("GEE_CREDENTIALS")
+if not credentials_path:
+    raise RuntimeError("Не установлена переменная окружения GEE_CREDENTIALS")
+
 # Авторизация Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_path, scope)
 client = gspread.authorize(creds)
 
 # Открытие таблицы
