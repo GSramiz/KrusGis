@@ -1,20 +1,20 @@
-name: Run Sentinel-2 Script
+
+name: gee-run.yml
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   run-script:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    env:
+      GOOGLE_APPLICATION_CREDENTIALS: service-account.json
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-      - name: Set up Python 3.10
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
@@ -24,5 +24,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run main.py
+      - name: Upload credentials
+        run: echo "${{ secrets.SERVICE_ACCOUNT_JSON }}" > service-account.json
+
+      - name: Run QLR generator
         run: python main.py
