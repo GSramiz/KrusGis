@@ -1,30 +1,41 @@
-# Импорты
+#  Импорты
+import os
+import json
 import ee
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Авторизация в Earth Engine и Google Sheets
-ee.Initialize()
+#  Авторизация в Earth Engine и Google Sheets
+if 'GEE_CREDENTIALS' in os.environ:
+    credentials_dict = json.loads(os.environ['GEE_CREDENTIALS'])
+    credentials = ee.ServiceAccountCredentials('', key_data=credentials_dict)
+    ee.Initialize(credentials)
+else:
+    ee.Initialize()
+
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
-client = gspread.authorize(creds)
+if 'GEE_CREDENTIALS' in os.environ:
+    sheet_creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ['GEE_CREDENTIALS']), scope)
+else:
+    sheet_creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+client = gspread.authorize(sheet_creds)
 
 #  Импорт Google Sheets
 spreadsheet = client.open_by_key('1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY')
 sheet = spreadsheet.worksheet('Sentinel-2 Покрытие')
 data = sheet.get("A2:C821")
 
-# 📅 Месяцы
+#  Месяцы
 month_map = {
     'январь': '01', 'февраль': '02', 'март': '03', 'апрель': '04',
     'май': '05', 'июнь': '06', 'июль': '07', 'август': '08',
     'сентябрь': '09', 'октябрь': '10', 'ноябрь': '11', 'декабрь': '12'
 }
 
-# Коллекция регионов
+# 📌 Коллекция регионов
 regions = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
 
-# Обработка строк
+#  Обработка строк
 for i, row in enumerate(data):
     region_name = row[0]
     month_year = row[1]
@@ -56,8 +67,8 @@ for i, row in enumerate(data):
                   .filterBounds(region)
                   .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 60))
                   .map(lambda img: img.select(['TCI_R', 'TCI_G', 'TCI_B'])
-                                .resample('bicubic')
-                                .copyProperties(img, img.propertyNames())))
+                                    .resample('bicubic')
+                                    .copyProperties(img, img.propertyNames())))
 
     mosaic = collection.mosaic().clip(region)
 
