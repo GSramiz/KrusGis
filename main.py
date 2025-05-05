@@ -1,5 +1,6 @@
 # main.py
 import os
+import json
 import ee
 import gspread
 from datetime import datetime
@@ -16,32 +17,31 @@ DRIVE_FOLDER_ID = '1IAAEI0NDp_X5iy78jmGPzwJcF6POykRd'
 REGIONS_ASSET = 'projects/ee-romantik1994/assets/region'
 ACCOUNT_EMAIL = 'gee-script@ee-romantik1994.iam.gserviceaccount.com'
 
-# Авторизация
-service_account_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', 'service-account.json')
-credentials = Credentials.from_service_account_file(service_account_path, scopes=[
+# Авторизация из переменной окружения
+service_account_info = json.loads(os.environ['GOOGLE_APPLICATION_CREDENTIALS_JSON'])
+
+credentials = Credentials.from_service_account_info(service_account_info, scopes=[
     'https://www.googleapis.com/auth/drive',
     'https://www.googleapis.com/auth/spreadsheets'])
 
 gs_client = gspread.authorize(credentials)
-sheet = gs_client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
+ee.Initialize(credentials.with_subject(ACCOUNT_EMAIL))
 
-ee.Initialize(get_ee_service())
-
-# Загрузка регионов
+# Загрузка всех названий регионов
 regions = ee.FeatureCollection(REGIONS_ASSET).aggregate_array('title').getInfo()
-data = sheet.get_all_values()[1:]  # пропустить заголовки
+data = sheet.get_all_values()[1:]  # пропустить заголовок
 
+# Обработка каждой строки таблицы
 for row_idx, (region, month_year, _) in enumerate(data, start=2):
     if region not in regions:
-        print(f"Пропуск неизвестного региона: {region}")
+        print(f"⏭️ Пропуск неизвестного региона: {region}")
         continue
 
     month, year = parse_month_year(month_year)
     if is_after_may_2025(month, year):
-        print(f"Пропуск {region} {month_year} — после мая 2025")
+        print(f"⏭️ Пропуск {region} {month_year} — после мая 2025")
         continue
 
-    # Фильтрация снимков
     region_fc = ee.FeatureCollection(REGIONS_ASSET).filter(ee.Filter.eq('title', region))
     geometry = region_fc.geometry()
     start_date = f"{year}-{month:02d}-01"
@@ -53,19 +53,30 @@ for row_idx, (region, month_year, _) in enumerate(data, start=2):
         .filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE', 80))
 
     if collection.size().getInfo() == 0:
-        print(f"Нет снимков: {region} {month_year}")
+        print(f"📭 Нет снимков: {region} {month_year}")
         sheet.update_cell(row_idx, 3, 'Нет снимков')
         continue
 
-    # Генерация XYZ
-    image = collection.sort('CLOUDY_PIXEL_PERCENTAGE').mosaic()
+    # Маска облаков и сглаживание
+    def mask_and_smooth(img):
+        scl = img.select('SCL')
+        cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10)).And(scl.neq(11))
+        masked = img.updateMask(cloud_mask)
+        return masked.resample('bicubic').convolve(ee.Kernel.gaussian(radius=1, sigma=1))
+
+    image = collection.map(mask_and_smooth).median()
     image = image.visualize(bands=['TCI_R', 'TCI_G', 'TCI_B'], max=3000)
+
+    # Генерация XYZ-ссылки
     map_id = ee.data.getMapId({'image': image})
     url = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{map_id['mapid']}/tiles/{{z}}/{{x}}/{{y}}?token={map_id['token']}"
 
-    # Генерация и загрузка QLR
-    filename = f"{region}_{month_year.replace(' ', '_')}.qlr"
+    # QLR-экспорт и загрузка
+    safe_region = region.replace(" ", "_").replace("'", "")
+    filename = f"{safe_region}_{month_year.replace(' ', '_')}.qlr"
     qlr_path = generate_qlr_file(url, filename)
     download_url = upload_to_drive(qlr_path, filename, DRIVE_FOLDER_ID, credentials)
+
+    # Обновление таблицы
     sheet.update_cell(row_idx, 3, download_url)
     print(f"✅ {region} {month_year} — {download_url}")
