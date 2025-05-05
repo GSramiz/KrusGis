@@ -79,16 +79,41 @@ def create_qlr_file(region, date_str, xyz_url):
     return filepath, filename
 
 #  Загрузка в Google Drive
-def upload_to_drive(filepath, filename, drive_service):
-    folder_id = "1IAAEI0NDp_X5iy78jmGPzwJcF6POykRd"
-    media = MediaFileUpload(filepath, mimetype="application/xml")
-    file_metadata = {
-        "name": filename,
-        "parents": [folder_id],
-        "mimeType": "application/xml"
-    }
-    uploaded = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-    return f"https://drive.google.com/file/d/{uploaded['id']}/view?usp=sharing"
+def upload_to_drive(service_account_info, file_path, file_name):
+    try:
+        import googleapiclient.discovery
+        from googleapiclient.http import MediaFileUpload
+        from google.oauth2 import service_account
+
+        folder_id = "1IAAEI0NDp_X5iy78jmGPzwJcF6POykRd"
+
+        creds = service_account.Credentials.from_service_account_info(service_account_info)
+        drive_service = googleapiclient.discovery.build("drive", "v3", credentials=creds)
+
+        # Проверка доступа к папке
+        try:
+            _ = drive_service.files().get(fileId=folder_id, fields="id").execute()
+        except Exception as e:
+            raise PermissionError(
+                f"❌ Нет доступа к папке с ID {folder_id}. Убедитесь, что сервисный аккаунт "
+                f"{service_account_info['client_email']} добавлен в доступ к папке с ролью 'Редактор'.")
+
+        file_metadata = {
+            "name": file_name,
+            "parents": [folder_id]
+        }
+        media = MediaFileUpload(file_path, mimetype="application/xml")
+        file = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+
+        file_id = file.get("id")
+        return f"https://drive.google.com/uc?id={file_id}&export=download"
+
+    except PermissionError as pe:
+        log_error("upload_to_drive (доступ к папке)", pe)
+        return f"Ошибка доступа: {str(pe)}"
+    except Exception as e:
+        log_error("upload_to_drive", e)
+        return f"Ошибка загрузки: {str(e)}"
 
 #  Обновление таблицы
 def update_sheet(sheets_client, drive_service):
