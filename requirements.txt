@@ -1,3 +1,6 @@
-earthengine-api>=0.1.370
-gspread>=5.7.0
-oauth2client>=4.1.3
+google-api-python-client
+google-auth
+gspread
+oauth2client
+python-dateutil
+earthengine-api
