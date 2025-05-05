@@ -1,0 +1,10 @@
+# Игнорировать JSON-файлы с ключами
+credentials/*.json
+
+# Кеш Python
+__pycache__/
+*.py[cod]
+
+# Файлы временные
+*.log
+.env
