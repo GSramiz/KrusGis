@@ -24,7 +24,8 @@ jobs:
           pip install -r requirements.txt
 
       - name: Write GEE credentials to file
-        run: echo '${{ secrets.GEE_CREDENTIALS }}' > gee_service_account.json
+        run: |
+          echo "${{ secrets.GEE_CREDENTIALS }}" > gee_service_account.json
 
       - name: Run main.py
         env:
