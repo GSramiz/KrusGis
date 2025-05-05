@@ -1,135 +1,68 @@
 import ee
 import gspread
-import json
-import os
-import traceback
 from oauth2client.service_account import ServiceAccountCredentials
+import datetime
 
-# Логирование ошибок
-def log_error(context, error):
-    print(f"\n❌ ОШИБКА в {context}:")
-    print(f"Тип: {type(error).__name__}")
-    print(f"Сообщение: {str(error)}")
-    traceback.print_exc()
-    print("=" * 50)
+# Авторизация Earth Engine
+ee.Initialize()
 
-# Инициализация Earth Engine и Google Sheets
-def initialize_services():
+# Авторизация Google Sheets
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+client = gspread.authorize(creds)
+
+# Открытие таблицы
+sheet = client.open_by_key("1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY").worksheet("Sentinel-2 Покрытие")
+
+# Загрузка ассета с регионами
+regions_fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
+
+# Обработка каждой строки таблицы
+rows = sheet.get_all_values()[1:]  # пропустить заголовок
+
+for i, row in enumerate(rows, start=2):  # начиная со 2-й строки
+    region_name = row[0].strip()
+    month_year = row[1].strip()
+    
+    if len(row) > 2 and row[2].strip():  # пропустить, если URL уже заполнен
+        continue
+
     try:
-        print("\n🔧 Инициализация сервисов...")
+        # Парсинг даты
+        date_obj = datetime.datetime.strptime(month_year, "%B %Y")
+        start_date = date_obj.strftime("%Y-%m-01")
+        end_date = (date_obj + datetime.timedelta(days=32)).replace(day=1).strftime("%Y-%m-01")
 
-        service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
-        credentials = ee.ServiceAccountCredentials(
-            service_account_info["client_email"],
-            key_data=json.dumps(service_account_info)
+        # Фильтрация региона
+        region = regions_fc.filter(ee.Filter.eq('title', region_name)).geometry()
+
+        # Фильтрация по времени и облакам
+        collection = (
+            ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterBounds(region)
+            .filterDate(start_date, end_date)
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 50))
+            .map(lambda img: img.updateMask(img.select("SCL").neq(3))  # remove cloud shadows
+                                  .updateMask(img.select("SCL").neq(8)))  # remove clouds
         )
-        ee.Initialize(credentials)
-        print("✅ Earth Engine: инициализирован")
 
-        scope = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        sheets_client = gspread.authorize(
-            ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
-        )
-        print("✅ Google Sheets: авторизация прошла успешно")
-        return sheets_client
+        # Получение медианы и TCI визуализация
+        mosaic = collection.median().clip(region).resample('bicubic').convolve(ee.Kernel.gaussian(2, 1))
 
-    except Exception as e:
-        log_error("initialize_services", e)
-        raise
+        vis_params = {
+            "bands": ["TCI_R", "TCI_G", "TCI_B"],
+            "min": 0,
+            "max": 3000
+        }
 
-# Перевод месяца из строки в номер
-def month_str_to_number(name):
-    months = {
-        "Январь": "01", "Февраль": "02", "Март": "03", "Апрель": "04",
-        "Май": "05", "Июнь": "06", "Июль": "07", "Август": "08",
-        "Сентябрь": "09", "Октябрь": "10", "Ноябрь": "11", "Декабрь": "12"
-    }
-    return months.get(name.strip().capitalize(), None)
+        # Генерация карты и сборка корректной ссылки
+        map_info = ee.data.getMapId({"image": mosaic.visualize(**vis_params)})
+        mapid = map_info["mapid"]
+        xyz_url = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
-# Получение геометрии из FeatureCollection
-def get_geometry_from_asset(region_name):
-    fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
-    region = fc.filter(ee.Filter.eq("title", region_name)).first()
-    if region is None:
-        raise ValueError(f"Регион '{region_name}' не найден в ассете")
-    return region.geometry()
-
-# Обновление таблицы
-def update_sheet(sheets_client):
-    try:
-        print("\n📊 Обновление таблицы")
-
-        SPREADSHEET_ID = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
-        SHEET_NAME = "Sentinel-2 Покрытие"
-
-        spreadsheet = sheets_client.open_by_key(SPREADSHEET_ID)
-        worksheet = spreadsheet.worksheet(SHEET_NAME)
-        data = worksheet.get_all_values()
-
-        for row_idx, row in enumerate(data[1:], start=2):
-            try:
-                region, date_str = row[:2]
-                if not region or not date_str:
-                    continue
-
-                parts = date_str.strip().split()
-                if len(parts) != 2:
-                    raise ValueError(f"Неверный формат даты: '{date_str}'")
-
-                month_num = month_str_to_number(parts[0])
-                year = parts[1]
-                start = f"{year}-{month_num}-01"
-                end = ee.Date(start).advance(1, "month")
-
-                print(f"\n🌍 {region} — {start} - {end.format('YYYY-MM-dd').getInfo()}")
-
-                geometry = get_geometry_from_asset(region)
-
-                def mask_clouds(img):
-                    scl = img.select("SCL")
-                    cloud_classes = ee.List([3, 8, 9, 10])
-                    mask = scl.remap(cloud_classes, ee.List.repeat(0, cloud_classes.length()), 1)
-                    return img.updateMask(mask)
-
-                collection = ee.ImageCollection("COPERNICUS/S2_SR") \
-                    .filterDate(start, end) \
-                    .filterBounds(geometry) \
-                    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60)) \
-                    .map(mask_clouds) \
-                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
-                         .resample("bicubic")
-                         .copyProperties(img, img.propertyNames()))
-
-                mosaic = collection.mosaic().clip(geometry)
-                kernel = ee.Kernel.gaussian(1.2, 1.2, "pixels", True)
-                smoothed = mosaic.convolve(kernel)
-
-                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                vis_image = smoothed.visualize(**vis)
-
-                map_info = ee.data.getMapId({"image": vis_image})
-                mapid = map_info["mapid"]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
-
-                worksheet.update_cell(row_idx, 3, xyz)
-
-            except Exception as e:
-                log_error(f"Строка {row_idx}", e)
-                worksheet.update_cell(row_idx, 3, f"Ошибка: {str(e)[:100]}")
+        # Запись в таблицу
+        sheet.update_cell(i, 3, xyz_url)
+        print(f"[{region_name} — {month_year}] ✅")
 
     except Exception as e:
-        log_error("update_sheet", e)
-        raise
-
-# Точка входа
-if __name__ == "__main__":
-    try:
-        client = initialize_services()
-        update_sheet(client)
-        print("\n✅ Скрипт успешно завершен")
-    except Exception as e:
-        log_error("main", e)
-        exit(1)
+        print(f"[{region_name} — {month_year}] ❌ Ошибка: {e}")
