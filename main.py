@@ -1,4 +1,5 @@
 import ee
+import os
 import json
 import calendar
 import time
@@ -6,10 +7,16 @@ import re
 import gspread
 from google.oauth2.service_account import Credentials
 
-# ============ 1. Загрузка GEE credentials ============
+# ============ 1. Загрузка GEE credentials из переменной среды ============
 
-with open("credentials.json", "r") as f:
-    service_account_info = json.load(f)
+service_account_raw = os.environ.get("GEE_CREDENTIALS")
+if not service_account_raw:
+    raise RuntimeError("Переменная среды GEE_CREDENTIALS не установлена")
+
+try:
+    service_account_info = json.loads(service_account_raw)
+except json.JSONDecodeError:
+    raise ValueError("Переменная GEE_CREDENTIALS содержит некорректный JSON")
 
 # Авторизация в Earth Engine
 credentials_ee = ee.ServiceAccountCredentials(
@@ -23,9 +30,11 @@ scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis
 credentials_gsheets = Credentials.from_service_account_info(service_account_info, scopes=scope)
 gc = gspread.authorize(credentials_gsheets)
 
-# Таблица
+# Пример использования: открыть таблицу по ID
 SPREADSHEET_ID = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
-worksheet = gc.open_by_key(SPREADSHEET_ID).sheet1
+spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+
+# Далее — основной код, как у тебя был, работа с листами, URL и т.д.
 
 # Колонки: A — Регион, B — Месяц и год, C — URL покрытия (авто)
 records = worksheet.get_all_values()[1:]  # без заголовка
