@@ -47,7 +47,7 @@ def month_str_to_number(name):
         "Май": "05", "Июнь": "06", "Июль": "07", "Август": "08",
         "Сентябрь": "09", "Октябрь": "10", "Ноябрь": "11", "Декабрь": "12"
     }
-    return months.get(name.strip().capitalize())
+    return months.get(name.strip().capitalize(), None)
 
 # Получение геометрии из FeatureCollection
 def get_geometry_from_asset(region_name):
@@ -80,18 +80,7 @@ def update_sheet(sheets_client):
                     raise ValueError(f"Неверный формат даты: '{date_str}'")
 
                 month_num = month_str_to_number(parts[0])
-                if not month_num:
-                    raise ValueError(f"Неизвестное имя месяца: '{parts[0]}'")
                 year = parts[1]
-
-                # Пропуск будущих месяцев
-                import datetime
-                today = datetime.date.today()
-                target = datetime.date(int(year), int(month_num), 1)
-                if target > today.replace(day=1):
-                    worksheet.update_cell(row_idx, 3, "Будущий месяц")
-                    continue
-
                 start = f"{year}-{month_num}-01"
                 end = ee.Date(start).advance(1, "month")
 
@@ -114,11 +103,6 @@ def update_sheet(sheets_client):
                          .resample("bicubic")
                          .copyProperties(img, img.propertyNames()))
 
-                size = collection.size().getInfo()
-                if size == 0:
-                    worksheet.update_cell(row_idx, 3, "Нет снимков")
-                    continue
-
                 mosaic = collection.mosaic().clip(geometry)
                 kernel = ee.Kernel.gaussian(1.2, 1.2, "pixels", True)
                 smoothed = mosaic.convolve(kernel)
@@ -127,8 +111,8 @@ def update_sheet(sheets_client):
                 vis_image = smoothed.visualize(**vis)
 
                 map_info = ee.data.getMapId({"image": vis_image})
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{map_info['mapid']}/tiles/{{z}}/{{x}}/{{y}}?token={map_info['token']}"
-
+                mapid = map_info["mapid"]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
                 worksheet.update_cell(row_idx, 3, xyz)
 
             except Exception as e:
