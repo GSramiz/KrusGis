@@ -2,27 +2,32 @@ name: Generate Sentinel-2 URLs
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *'  # каждый день в 04:00 UTC = 07:00 MSK
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
-    env:
-      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.x'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Write GCP credentials to file
+        run: |
+          echo "${{ secrets.GCP_SERVICE_ACCOUNT }}" > service-account.json
+
       - name: Run script
         run: python main.py
         env:
-          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          GOOGLE_APPLICATION_CREDENTIALS: service-account.json
