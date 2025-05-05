@@ -1,6 +1,5 @@
 # main.py
 import os
-import json
 import ee
 import gspread
 from datetime import datetime
@@ -17,15 +16,18 @@ DRIVE_FOLDER_ID = '1IAAEI0NDp_X5iy78jmGPzwJcF6POykRd'
 REGIONS_ASSET = 'projects/ee-romantik1994/assets/region'
 ACCOUNT_EMAIL = 'gee-script@ee-romantik1994.iam.gserviceaccount.com'
 
-# Авторизация из переменной окружения
-service_account_info = json.loads(os.environ['GOOGLE_APPLICATION_CREDENTIALS_JSON'])
+# Авторизация через путь к файлу
+service_account_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', 'service-account.json')
 
-credentials = Credentials.from_service_account_info(service_account_info, scopes=[
+credentials = Credentials.from_service_account_file(service_account_path, scopes=[
     'https://www.googleapis.com/auth/drive',
     'https://www.googleapis.com/auth/spreadsheets'])
 
 gs_client = gspread.authorize(credentials)
 ee.Initialize(credentials.with_subject(ACCOUNT_EMAIL))
+
+# Таблица
+sheet = gs_client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
 
 # Загрузка всех названий регионов
 regions = ee.FeatureCollection(REGIONS_ASSET).aggregate_array('title').getInfo()
