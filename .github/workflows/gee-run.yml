@@ -25,12 +25,12 @@ jobs:
 
     - name: 🔐 Декодирование service-account.json
       env:
-        GCP_SERVICE_ACCOUNT_B64: ${{ secrets.GCP_SA_KEY }}
+        GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}
       run: |
-        echo "$GCP_SERVICE_ACCOUNT_B64" | base64 -d > service-account.json
+        echo "$GEE_CREDENTIALS" | base64 -d > service-account.json
 
     - name: ▶️ Запуск скрипта
       env:
         GOOGLE_APPLICATION_CREDENTIALS: service-account.json
-        GEE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
+        GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}
       run: python main.py
