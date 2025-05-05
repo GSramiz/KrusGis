@@ -81,11 +81,19 @@ def create_qlr_file(region, date_str, xyz_url):
 #  Загрузка в Google Drive
 def upload_to_drive(service_account_info, file_path, file_name):
     try:
+        import json
         import googleapiclient.discovery
         from googleapiclient.http import MediaFileUpload
         from google.oauth2 import service_account
 
         folder_id = "1IAAEI0NDp_X5iy78jmGPzwJcF6POykRd"
+
+        # Преобразуем строку в словарь, если нужно
+        if isinstance(service_account_info, str):
+            try:
+                service_account_info = json.loads(service_account_info)
+            except json.JSONDecodeError:
+                raise ValueError("❌ service_account_info — строка, но невалидный JSON.")
 
         creds = service_account.Credentials.from_service_account_info(service_account_info)
         drive_service = googleapiclient.discovery.build("drive", "v3", credentials=creds)
@@ -96,7 +104,8 @@ def upload_to_drive(service_account_info, file_path, file_name):
         except Exception as e:
             raise PermissionError(
                 f"❌ Нет доступа к папке с ID {folder_id}. Убедитесь, что сервисный аккаунт "
-                f"{service_account_info['client_email']} добавлен в доступ к папке с ролью 'Редактор'.")
+                f"{service_account_info.get('client_email', 'неизвестно')} добавлен в доступ к папке с ролью 'Редактор'."
+            )
 
         file_metadata = {
             "name": file_name,
