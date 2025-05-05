@@ -1,16 +1,18 @@
-name: update-gee-links
+name: Run main.py
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-  schedule:
-    - cron: '0 6 * * *'
 
 jobs:
-  run-script:
+  run-main:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -22,8 +24,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run main.py
+      - name: Set up Earth Engine credentials
         env:
           GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}
         run: |
-          python main.py
+          mkdir -p ~/.config/earthengine
+          echo "$GEE_CREDENTIALS" > ~/.config/earthengine/credentials
+
+      - name: Run main.py
+        run: python main.py
