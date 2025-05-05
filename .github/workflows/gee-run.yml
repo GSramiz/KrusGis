@@ -1,4 +1,4 @@
-name: Generate Sentinel-2 URLs (via jq)
+name: Generate Sentinel-2 URLs (via printf)
 
 on:
   workflow_dispatch:
@@ -20,9 +20,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Create service-account.json using jq
+      - name: Create service-account.json with printf
         run: |
-          echo "$GCP_SERVICE_ACCOUNT" | jq '.' > service-account.json
+          printf "%s" "${GCP_SERVICE_ACCOUNT}" > service-account.json
 
       - name: Run script
         run: python main.py
