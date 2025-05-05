@@ -37,10 +37,14 @@ jobs:
             exit 1
           fi
 
+      - name: Create service-account.json
+        run: |
+          echo "${{ secrets.GCP_SERVICE_ACCOUNT }}" > service-account.json
+
       - name: Run script
         run: python main.py
         env:
-          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          GOOGLE_APPLICATION_CREDENTIALS: service-account.json
 
       - name: Upload QLR files
         uses: actions/upload-artifact@v4
