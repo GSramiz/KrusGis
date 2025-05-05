@@ -1,4 +1,4 @@
-name: Generate Sentinel-2 URLs (via printf)
+name: Generate Sentinel-2 URLs (via base64 decode)
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ jobs:
   run-script:
     runs-on: ubuntu-latest
     env:
-      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      GCP_SERVICE_ACCOUNT_B64: ${{ secrets.GCP_SERVICE_ACCOUNT_B64 }}
     steps:
       - uses: actions/checkout@v3
 
@@ -20,9 +20,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Create service-account.json with printf
+      - name: Decode base64 and save service-account.json
         run: |
-          printf "%s" "${GCP_SERVICE_ACCOUNT}" > service-account.json
+          echo "${GCP_SERVICE_ACCOUNT_B64}" | base64 --decode > service-account.json
 
       - name: Run script
         run: python main.py
