@@ -1,24 +1,27 @@
 import ee
-import os
 import json
-import datetime
 import calendar
 import time
 import re
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 
 # ============ 1. Загрузка GEE credentials ============
+
 with open("credentials.json", "r") as f:
     service_account_info = json.load(f)
 
 # Авторизация в Earth Engine
-credentials = ee.ServiceAccountCredentials(email=service_account_info["client_email"], key_data=json.dumps(service_account_info))
-ee.Initialize(credentials)
+credentials_ee = ee.ServiceAccountCredentials(
+    email=service_account_info["client_email"],
+    key_data=json.dumps(service_account_info)
+)
+ee.Initialize(credentials_ee)
 
-# Авторизация в Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-gc = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope))
+# Авторизация в Google Sheets (через google-auth)
+scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+credentials_gsheets = Credentials.from_service_account_info(service_account_info, scopes=scope)
+gc = gspread.authorize(credentials_gsheets)
 
 # Таблица
 SPREADSHEET_ID = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
@@ -87,6 +90,7 @@ def generate_preview_url(region_title, month_year):
 
 
 # ========== Обработка строк таблицы ==========
+
 for i, row in enumerate(records, start=2):  # начиная со 2-й строки
     region, month_year, existing_url = row[:3]
 
