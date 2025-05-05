@@ -16,7 +16,7 @@ DRIVE_FOLDER_ID = '1IAAEI0NDp_X5iy78jmGPzwJcF6POykRd'
 REGIONS_ASSET = 'projects/ee-romantik1994/assets/region'
 ACCOUNT_EMAIL = 'gee-script@ee-romantik1994.iam.gserviceaccount.com'
 
-# Авторизация через путь к файлу
+# Авторизация через файл
 service_account_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', 'service-account.json')
 
 credentials = Credentials.from_service_account_file(service_account_path, scopes=[
