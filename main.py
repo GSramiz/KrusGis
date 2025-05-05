@@ -8,12 +8,12 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # Аутентификация Earth Engine
 service_account = 'ee-romantik1994@ee-romantik1994.iam.gserviceaccount.com'
-credentials = ee.ServiceAccountCredentials(service_account, 'privatekey.json')
+credentials = ee.ServiceAccountCredentials(service_account, 'GEE_CREDENTIALS.json')
 ee.Initialize(credentials)
 
 # Google Sheets setup
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-gs_credentials = ServiceAccountCredentials.from_json_keyfile_name('privatekey.json', scope)
+gs_credentials = ServiceAccountCredentials.from_json_keyfile_name('GEE_CREDENTIALS.json', scope)
 gc = gspread.authorize(gs_credentials)
 spreadsheet = gc.open_by_key('1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY')
 worksheet = spreadsheet.worksheet('Sentinel-2 Покрытие')
