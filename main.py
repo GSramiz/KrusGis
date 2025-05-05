@@ -7,6 +7,35 @@ from googleapiclient.discovery import build
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
+# ---------- Earth Engine AUTH ----------
+
+SERVICE_ACCOUNT = 'gee-script@ee-romantik1994.iam.gserviceaccount.com'
+KEY_PATH = 'service_account.json'
+
+if not os.path.exists(KEY_PATH):
+    key_content = os.environ.get("GEE_CREDENTIALS")
+    if not key_content:
+        raise Exception("GEE_CREDENTIALS environment variable not found.")
+    with open(KEY_PATH, "w") as f:
+        f.write(key_content)
+
+credentials_ee = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEY_PATH)
+ee.Initialize(credentials_ee)
+
+# ---------- Google Sheets AUTH ----------
+
+scopes = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+credentials_gspread = Credentials.from_service_account_file(KEY_PATH, scopes=scopes)
+gc = gspread.authorize(credentials_gspread)
+
+# Пример: подключение к таблице
+spreadsheet_id = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
+sheet = gc.open_by_key(spreadsheet_id).sheet1
+
 # Инициализация Earth Engine
 ee.Initialize()
 
