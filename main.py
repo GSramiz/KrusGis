@@ -1,11 +1,11 @@
-#  Импорты
+# 📌 Импорты
 import os
 import json
 import ee
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-#  Авторизация в Earth Engine и Google Sheets
+# 📌 Авторизация в Earth Engine и Google Sheets
 if 'GEE_CREDENTIALS' in os.environ:
     credentials_dict = json.loads(os.environ['GEE_CREDENTIALS'])
     credentials = ee.ServiceAccountCredentials('', key_data=credentials_dict)
@@ -20,12 +20,12 @@ else:
     sheet_creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
 client = gspread.authorize(sheet_creds)
 
-#  Импорт Google Sheets
+# 📥 Импорт Google Sheets
 spreadsheet = client.open_by_key('1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY')
 sheet = spreadsheet.worksheet('Sentinel-2 Покрытие')
 data = sheet.get("A2:C821")
 
-#  Месяцы
+# 📅 Месяцы
 month_map = {
     'январь': '01', 'февраль': '02', 'март': '03', 'апрель': '04',
     'май': '05', 'июнь': '06', 'июль': '07', 'август': '08',
@@ -35,7 +35,7 @@ month_map = {
 # 📌 Коллекция регионов
 regions = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
 
-#  Обработка строк
+# 🔁 Обработка строк
 for i, row in enumerate(data):
     region_name = row[0]
     month_year = row[1]
