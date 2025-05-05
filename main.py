@@ -114,8 +114,7 @@ def update_sheet(sheets_client):
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
                 vis_image = smoothed.visualize(**vis)
 
-                map_info = ee.data.getMapId({"image": vis_image})
-                mapid = map_info["mapid"]
+                mapid = ee.data.getMapId({"image": vis_image})["mapid"]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
