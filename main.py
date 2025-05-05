@@ -5,6 +5,7 @@ import os
 import traceback
 from oauth2client.service_account import ServiceAccountCredentials
 
+# Логирование ошибок
 def log_error(context, error):
     print(f"\n❌ ОШИБКА в {context}:")
     print(f"Тип: {type(error).__name__}")
@@ -12,6 +13,7 @@ def log_error(context, error):
     traceback.print_exc()
     print("=" * 50)
 
+# Инициализация Earth Engine и Google Sheets
 def initialize_services():
     try:
         print("\n🔧 Инициализация сервисов...")
@@ -38,6 +40,7 @@ def initialize_services():
         log_error("initialize_services", e)
         raise
 
+# Перевод месяца из строки в номер
 def month_str_to_number(name):
     months = {
         "Январь": "01", "Февраль": "02", "Март": "03", "Апрель": "04",
@@ -46,11 +49,15 @@ def month_str_to_number(name):
     }
     return months.get(name.strip().capitalize(), None)
 
+# Получение геометрии из FeatureCollection
 def get_geometry_from_asset(region_name):
-    regions = ee.FeatureCollection("projects/ee-romantik1994/assets/regions")
-    region = regions.filter(ee.Filter.eq("name", region_name)).first()
-    return ee.Feature(region).geometry()
+    fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
+    region = fc.filter(ee.Filter.eq("title", region_name)).first()
+    if region is None:
+        raise ValueError(f"Регион '{region_name}' не найден в ассете")
+    return region.geometry()
 
+# Обновление таблицы
 def update_sheet(sheets_client):
     try:
         print("\n📊 Обновление таблицы")
@@ -97,13 +104,14 @@ def update_sheet(sheets_client):
                          .copyProperties(img, img.propertyNames()))
 
                 mosaic = collection.mosaic().clip(geometry)
+
                 kernel = ee.Kernel.gaussian(1.2, 1.2, "pixels", True)
                 smoothed = mosaic.convolve(kernel)
 
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                map_info = smoothed.visualize(**vis).getMapId()
-
+                map_info = smoothed.visualize(**vis).getMap()
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{map_info['mapid']}/tiles/{{z}}/{{x}}/{{y}}?token={map_info['token']}"
+
                 worksheet.update_cell(row_idx, 3, xyz)
 
             except Exception as e:
@@ -114,6 +122,7 @@ def update_sheet(sheets_client):
         log_error("update_sheet", e)
         raise
 
+# Точка входа
 if __name__ == "__main__":
     try:
         client = initialize_services()
