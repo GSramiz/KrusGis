@@ -23,11 +23,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: 🔐 Декодирование service-account.json
+    - name: 🔐 Запись service-account.json
       env:
         GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}
       run: |
-        echo "$GEE_CREDENTIALS" | base64 -d > service-account.json
+        echo "$GEE_CREDENTIALS" > service-account.json
 
     - name: ▶️ Запуск скрипта
       env:
