@@ -25,6 +25,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Write credentials.json from secret
+        run: |
+          echo "${{ secrets.GH_SECRET }}" > credentials.json
+
       - name: Run script
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/credentials.json
