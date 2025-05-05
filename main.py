@@ -111,8 +111,9 @@ def update_sheet(sheets_client):
                 vis_image = smoothed.visualize(**vis)
 
                 map_info = ee.data.getMapId({"image": vis_image})
-                mapid = map_info["mapid"]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
+mapid = map_info["mapid"]
+xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
+
                 worksheet.update_cell(row_idx, 3, xyz)
 
             except Exception as e:
