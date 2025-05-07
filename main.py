@@ -111,11 +111,12 @@ def update_sheet(sheets_client):
                 kernel = ee.Kernel.gaussian(1.2, 1.2, "pixels", True)
                 smoothed = mosaic.convolve(kernel)
 
+                # Визуализация (ускоренный способ через сервер)
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                vis_image = smoothed.visualize(**vis)
-
-                # Получение mapid и сборка ссылки вручную
-                tile_info = ee.data.getMapId({"image": vis_image})
+                tile_info = ee.data.getMapId({
+                    "image": smoothed,
+                    "visParams": vis
+                })
                 mapid = tile_info["mapid"]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
