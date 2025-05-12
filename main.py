@@ -99,11 +99,12 @@ def update_sheet(sheets_client):
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
     .filterDate(start, end) \
     .filterBounds(geometry) \
-    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60)) \
+    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
     .sort("CLOUDY_PIXEL_PERCENTAGE") \
     .map(mask_clouds) \
     .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
-         .resample("bicubic"))
+    kernel = ee.Kernel.gaussian(1.2, 1.2, "pixels", True)
+    mosaic = mosaic.convolve(kernel)
 
 
                 # Проверка наличия снимков
