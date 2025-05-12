@@ -103,8 +103,6 @@ def update_sheet(sheets_client):
     .sort("CLOUDY_PIXEL_PERCENTAGE") \
     .map(mask_clouds) \
     .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
-    kernel = ee.Kernel.gaussian(1.2, 1.2, "pixels", True)
-    mosaic = mosaic.convolve(kernel)
 
 
                 # Проверка наличия снимков
@@ -115,6 +113,11 @@ def update_sheet(sheets_client):
 
                 # Мозаика
                 mosaic = collection.mosaic().clip(geometry)
+
+                # Применим сглаживание (гауссов фильтр)
+                var kernel = ee.Kernel.gaussian({
+                radius: 1.2, sigma: 1.2, units: 'pixels', normalize: true});
+                var smoothed = mosaic.convolve(kernel);
 
                 # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
