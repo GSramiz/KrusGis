@@ -111,20 +111,25 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Мозаика
-                mosaic = collection.mosaic().clip(geometry)
+                # Мозаика (без clip!)
+mosaic = collection.mosaic()
 
-                # Визуализация
-                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                tile_info = ee.data.getMapId({
-                    "image": mosaic,
-                    "visParams": vis
-                })
-                raw_mapid = tile_info["mapid"]
-                clean_mapid = raw_mapid.split("/")[-1]  # удаляем всё до последнего /
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
+# Визуализация
+vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
+try:
+    tile_info = ee.data.getMapId({
+        "image": mosaic.visualize(**vis).clip(geometry),  # теперь clip внутри getMapId
+    })
+    raw_mapid = tile_info["mapid"]
+    clean_mapid = raw_mapid.split("/")[-1]
+    xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
-                worksheet.update_cell(row_idx, 3, xyz)
+    worksheet.update_cell(row_idx, 3, xyz)
+
+except Exception as e:
+    log_error(f"MapID (строка {row_idx})", e)
+    worksheet.update_cell(row_idx, 3, f"Ошибка загрузки mapid: {str(e)[:100]}")
+
 
             except Exception as e:
                 log_error(f"Строка {row_idx}", e)
