@@ -114,16 +114,16 @@ def update_sheet(sheets_client):
                 # Мозаика
                 mosaic = collection.mosaic().clip(geometry)
 
-                # Визуализация
-                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                tile_info = ee.data.getMapId({
-                    "image": mosaic,
-                    "visParams": vis
-                })
-                mapid = tile_info["mapid"]
+               # Визуализация
+vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
+tile_info = ee.data.getMapId({
+    "image": mosaic,
+    "visParams": vis
+})
+mapid = tile_info["mapid"]
+clean_mapid = mapid.split("/")[-1]  # <-- вот здесь обрезаем всё лишнее
+xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
-                # ✅ Формируем корректный XYZ URL без вложенных путей
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
 
