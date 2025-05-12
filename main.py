@@ -2,7 +2,6 @@ import ee
 import gspread
 import json
 import os
-import time
 import traceback
 from oauth2client.service_account import ServiceAccountCredentials
 
@@ -103,32 +102,26 @@ def update_sheet(sheets_client):
                     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
                     .sort("CLOUDY_PIXEL_PERCENTAGE") \
                     .map(mask_clouds) \
-                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"]).resample("bicubic"))
+                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
+                         .resample("bicubic"))
 
+                # Проверка наличия снимков
                 count = collection.size().getInfo()
                 if count == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
+                # Мозаика
                 mosaic = collection.mosaic().clip(geometry)
+
+                # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-
-                # Повторные попытки получения MapId
-                for attempt in range(3):
-                    try:
-                        tile_info = ee.data.getMapId({
-                            "image": mosaic,
-                            "visParams": vis
-                        })
-                        break
-                    except Exception as retry_error:
-                        if attempt == 2:
-                            raise retry_error
-                        print(f"⚠️ Попытка {attempt + 1} не удалась, повтор через 5 сек...")
-                        time.sleep(5)
-
+                tile_info = ee.data.getMapId({
+                    "image": mosaic,
+                    "visParams": vis
+                })
                 raw_mapid = tile_info["mapid"]
-                clean_mapid = raw_mapid.split("/")[-1]
+                clean_mapid = raw_mapid.split("/")[-1]  # удаляем всё до последнего /
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
