@@ -17,6 +17,7 @@ def log_error(context, error):
 def initialize_services():
     try:
         print("\n🔧 Инициализация сервисов...")
+
         service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
 
         credentials = ee.ServiceAccountCredentials(
@@ -100,7 +101,8 @@ def update_sheet(sheets_client):
                     .filterBounds(geometry) \
                     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60)) \
                     .map(mask_clouds) \
-                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"]))
+                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
+                         .resample("bicubic"))
 
                 # Проверка наличия снимков
                 count = collection.size().getInfo()
@@ -108,13 +110,13 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Мозаика (без clip)
-                mosaic = collection.mosaic()
+                # Мозаика
+                mosaic = collection.mosaic().clip(geometry)
 
                 # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
                 tile_info = ee.data.getMapId({
-                    "image": mosaic.clip(geometry),  # clip ТОЛЬКО здесь
+                    "image": mosaic,
                     "visParams": vis
                 })
                 mapid = tile_info["mapid"]
