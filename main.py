@@ -95,7 +95,6 @@ def update_sheet(sheets_client):
     .filterBounds(geometry) \
     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
     .sort("CLOUDY_PIXEL_PERCENTAGE") \
-    .map(mask_clouds) \
     .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
          .resample("bicubic"))
 
