@@ -4,7 +4,6 @@ import json
 import os
 import traceback
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
 
 # Логирование ошибок
 def log_error(context, error):
@@ -18,7 +17,6 @@ def log_error(context, error):
 def initialize_services():
     try:
         print("\n🔧 Инициализация сервисов...")
-
         service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
 
         credentials = ee.ServiceAccountCredentials(
@@ -77,9 +75,6 @@ def update_sheet(sheets_client):
         worksheet = spreadsheet.worksheet(SHEET_NAME)
         data = worksheet.get_all_values()
 
-        current_year = datetime.now().year
-        current_month = datetime.now().month
-
         for row_idx, row in enumerate(data[1:], start=2):
             try:
                 region, date_str = row[:2]
@@ -91,43 +86,41 @@ def update_sheet(sheets_client):
                     raise ValueError(f"Неверный формат даты: '{date_str}'")
 
                 month_num = month_str_to_number(parts[0])
-                year = int(parts[1])
-                if not month_num:
-                    raise ValueError(f"Неизвестный месяц: '{parts[0]}'")
-
-                if (year > current_year) or (year == current_year and int(month_num) > current_month):
-                    worksheet.update_cell(row_idx, 3, "Нет снимков")
-                    continue
-
+                year = parts[1]
                 start = f"{year}-{month_num}-01"
                 end = ee.Date(start).advance(1, "month")
+
                 print(f"\n🌍 {region} — {start} - {end.format('YYYY-MM-dd').getInfo()}")
 
                 geometry = get_geometry_from_asset(region)
 
+                # Коллекция изображений
                 collection = ee.ImageCollection("COPERNICUS/S2_SR") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
                     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60)) \
                     .map(mask_clouds) \
-                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"]).resample("bicubic"))
+                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"]))
 
-                if collection.size().getInfo() == 0:
+                # Проверка наличия снимков
+                count = collection.size().getInfo()
+                if count == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                mosaic = collection.mosaic().clip(geometry)
+                # Мозаика (без clip)
+                mosaic = collection.mosaic()
+
+                # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-
-                # Получение PNG-ссылки через getThumbURL
-                thumb_url = mosaic.visualize(**vis).getThumbURL({
-                    "region": geometry.bounds().getInfo(),
-                    "dimensions": 1024,
-                    "format": "png"
+                tile_info = ee.data.getMapId({
+                    "image": mosaic.clip(geometry),  # clip ТОЛЬКО здесь
+                    "visParams": vis
                 })
+                mapid = tile_info["mapid"]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
-                worksheet.update_cell(row_idx, 3, thumb_url)
-                print(f"✅ {region} — {date_str} — PNG URL записан")
+                worksheet.update_cell(row_idx, 3, xyz)
 
             except Exception as e:
                 log_error(f"Строка {row_idx}", e)
