@@ -97,13 +97,14 @@ def update_sheet(sheets_client):
 
                 # Коллекция изображений
                 collection = ee.ImageCollection("COPERNICUS/S2_SR") \
-                    .filterDate(start, end) \
-                    .filterBounds(geometry) \
-                    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60)) \
-                    .sort("CLOUDY_PIXEL_PERCENTAGE") \
-                    .map(mask_clouds) \
-                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
-                         .resample("bicubic"))
+    .filterDate(start, end) \
+    .filterBounds(geometry) \
+    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60)) \
+    .sort("CLOUDY_PIXEL_PERCENTAGE") \
+    .map(mask_clouds) \
+    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
+         .resample("bicubic"))
+
 
                 # Проверка наличия снимков
                 count = collection.size().getInfo()
@@ -111,20 +112,19 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Мозаика по наименее облачным снимкам
-                mosaic = collection.qualityMosaic("TCI_B")
+                # Мозаика
+                mosaic = collection.mosaic().clip(geometry)
 
-                # Визуализация (клип — уже внутри getMapId, это ускоряет)
+                # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
                 tile_info = ee.data.getMapId({
-                    "image": mosaic.clip(geometry),
+                    "image": mosaic,
                     "visParams": vis
                 })
                 mapid = tile_info["mapid"]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
-                print(f"✅ {region} — {date_str} — ссылка добавлена")
 
             except Exception as e:
                 log_error(f"Строка {row_idx}", e)
