@@ -4,6 +4,7 @@ import json
 import os
 import traceback
 from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
 
 # Логирование ошибок
 def log_error(context, error):
@@ -58,17 +59,11 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-# Функция для маскировки облаков
+# Маскирование облаков по SCL
 def mask_clouds(img):
     scl = img.select("SCL")
-    mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
-    return img.updateMask(mask)
-
-# Добавление яркости для qualityMosaic
-def add_brightness(img):
-    rgb = img.select(["TCI_R", "TCI_G", "TCI_B"])
-    brightness = rgb.reduce(ee.Reducer.mean()).rename("brightness")
-    return img.addBands(brightness)
+    cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
+    return img.updateMask(cloud_mask)
 
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
@@ -82,6 +77,9 @@ def update_sheet(sheets_client):
         worksheet = spreadsheet.worksheet(SHEET_NAME)
         data = worksheet.get_all_values()
 
+        current_year = datetime.now().year
+        current_month = datetime.now().month
+
         for row_idx, row in enumerate(data[1:], start=2):
             try:
                 region, date_str = row[:2]
@@ -93,33 +91,43 @@ def update_sheet(sheets_client):
                     raise ValueError(f"Неверный формат даты: '{date_str}'")
 
                 month_num = month_str_to_number(parts[0])
-                year = parts[1]
+                year = int(parts[1])
+                if not month_num:
+                    raise ValueError(f"Неизвестный месяц: '{parts[0]}'")
+
+                if (year > current_year) or (year == current_year and int(month_num) > current_month):
+                    worksheet.update_cell(row_idx, 3, "Нет снимков")
+                    continue
+
                 start = f"{year}-{month_num}-01"
                 end = ee.Date(start).advance(1, "month")
-
                 print(f"\n🌍 {region} — {start} - {end.format('YYYY-MM-dd').getInfo()}")
 
                 geometry = get_geometry_from_asset(region)
 
-                # Подготовка коллекции
                 collection = ee.ImageCollection("COPERNICUS/S2_SR") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
                     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60)) \
                     .map(mask_clouds) \
-                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"]).resample("bicubic")) \
-                    .map(add_brightness)
+                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"]).resample("bicubic"))
 
-                # Мозаика по яркости
-                mosaic = collection.qualityMosaic("brightness").clip(geometry)
+                if collection.size().getInfo() == 0:
+                    worksheet.update_cell(row_idx, 3, "Нет снимков")
+                    continue
 
-                # Визуализация и получение ссылки
+                mosaic = collection.mosaic().clip(geometry)
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                tile_info = ee.data.getMapId({"image": mosaic.visualize(**vis)})
-                mapid = tile_info["mapid"]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
-                worksheet.update_cell(row_idx, 3, xyz)
+                # Получение PNG-ссылки через getThumbURL
+                thumb_url = mosaic.visualize(**vis).getThumbURL({
+                    "region": geometry.bounds().getInfo(),
+                    "dimensions": 1024,
+                    "format": "png"
+                })
+
+                worksheet.update_cell(row_idx, 3, thumb_url)
+                print(f"✅ {region} — {date_str} — PNG URL записан")
 
             except Exception as e:
                 log_error(f"Строка {row_idx}", e)
