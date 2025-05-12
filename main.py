@@ -58,6 +58,18 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
+# Функция для маскировки облаков
+def mask_clouds(img):
+    scl = img.select("SCL")
+    mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
+    return img.updateMask(mask)
+
+# Добавление яркости для qualityMosaic
+def add_brightness(img):
+    rgb = img.select(["TCI_R", "TCI_G", "TCI_B"])
+    brightness = rgb.reduce(ee.Reducer.mean()).rename("brightness")
+    return img.addBands(brightness)
+
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
     try:
@@ -89,34 +101,21 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # Маскирование облаков по SCL
-                def mask_clouds(img):
-                    scl = img.select("SCL")
-                    cloud_classes = ee.List([3, 8, 9, 10])
-                    mask = scl.remap(cloud_classes, ee.List.repeat(0, cloud_classes.length()), 1)
-                    return img.updateMask(mask)
-
-                # Коллекция изображений
+                # Подготовка коллекции
                 collection = ee.ImageCollection("COPERNICUS/S2_SR") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
                     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60)) \
                     .map(mask_clouds) \
-                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
-                         .resample("bicubic")
-                         .copyProperties(img, img.propertyNames()))
+                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"]).resample("bicubic")) \
+                    .map(add_brightness)
 
-                # Мозаика + сглаживание
-                mosaic = collection.mosaic().clip(geometry)
-                kernel = ee.Kernel.gaussian(1.2, 1.2, "pixels", True)
-                smoothed = mosaic.convolve(kernel)
+                # Мозаика по яркости
+                mosaic = collection.qualityMosaic("brightness").clip(geometry)
 
-                # Визуализация (ускоренный способ через сервер)
+                # Визуализация и получение ссылки
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                tile_info = ee.data.getMapId({
-                    "image": smoothed,
-                    "visParams": vis
-                })
+                tile_info = ee.data.getMapId({"image": mosaic.visualize(**vis)})
                 mapid = tile_info["mapid"]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
@@ -138,4 +137,4 @@ if __name__ == "__main__":
         print("\n✅ Скрипт успешно завершен")
     except Exception as e:
         log_error("main", e)
-        exit(1) 
+        exit(1)
