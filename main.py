@@ -5,6 +5,7 @@ import os
 import traceback
 from oauth2client.service_account import ServiceAccountCredentials
 
+# Логирование ошибок
 def log_error(context, error):
     print(f"\n❌ ОШИБКА в {context}:")
     print(f"Тип: {type(error).__name__}")
@@ -12,9 +13,11 @@ def log_error(context, error):
     traceback.print_exc()
     print("=" * 50)
 
+# Инициализация Earth Engine и Google Sheets
 def initialize_services():
     try:
         print("\n🔧 Инициализация сервисов...")
+
         service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
 
         credentials = ee.ServiceAccountCredentials(
@@ -38,6 +41,7 @@ def initialize_services():
         log_error("initialize_services", e)
         raise
 
+# Перевод месяца из строки в номер
 def month_str_to_number(name):
     months = {
         "Январь": "01", "Февраль": "02", "Март": "03", "Апрель": "04",
@@ -46,6 +50,7 @@ def month_str_to_number(name):
     }
     return months.get(name.strip().capitalize(), None)
 
+# Получение геометрии региона
 def get_geometry_from_asset(region_name):
     fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
     region = fc.filter(ee.Filter.eq("title", region_name)).first()
@@ -53,11 +58,13 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
+# Маскирование облаков по SCL
 def mask_clouds(img):
     scl = img.select("SCL")
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(cloud_mask)
 
+# Основная логика обновления таблицы
 def update_sheet(sheets_client):
     try:
         print("\n📊 Обновление таблицы")
@@ -88,27 +95,35 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
+                # Коллекция изображений
                 collection = ee.ImageCollection("COPERNICUS/S2_SR") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
                     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60)) \
                     .sort("CLOUDY_PIXEL_PERCENTAGE") \
                     .map(mask_clouds) \
-                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"]).resample("bicubic"))
+                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
+                         .resample("bicubic"))
 
+                # Проверка наличия снимков
                 count = collection.size().getInfo()
                 if count == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                mosaic = collection.mosaic().clip(geometry)
+                # Мозаика
+                mosaic = collection.mosaic()
 
+                # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                map_info = mosaic.visualize(**vis).getMapId()
+                map_info = ee.data.getMapId({"image": mosaic.visualize(**vis)})
 
-                wms_like_url = f"https://earthengine.googleapis.com/map/{map_info['mapid']}/{{z}}/{{x}}/{{y}}?token={map_info['token']}"
+                wms_url = (
+                    f"https://earthengine.googleapis.com/map/{map_info['mapid']}/"
+                    f"{{z}}/{{x}}/{{y}}?token={map_info['token']}"
+                )
 
-                worksheet.update_cell(row_idx, 3, wms_like_url)
+                worksheet.update_cell(row_idx, 3, wms_url)
 
             except Exception as e:
                 log_error(f"Строка {row_idx}", e)
@@ -118,6 +133,7 @@ def update_sheet(sheets_client):
         log_error("update_sheet", e)
         raise
 
+# Точка входа
 if __name__ == "__main__":
     try:
         client = initialize_services()
