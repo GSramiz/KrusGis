@@ -1,6 +1,8 @@
 name: Run Sentinel-2 Script
 
 on:
+  schedule:
+    - cron: '0 5 * * *'  # каждый день в 08:00 по Москве (UTC+3)
   workflow_dispatch:
   push:
     branches: [ main ]
@@ -28,9 +30,14 @@ jobs:
         GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}
       run: |
         echo "$GEE_CREDENTIALS" > service-account.json
+        chmod 600 service-account.json
 
     - name: ▶️ Запуск скрипта
       env:
         GOOGLE_APPLICATION_CREDENTIALS: service-account.json
         GEE_CREDENTIALS: ${{ secrets.GEE_CREDENTIALS }}
       run: python main.py
+
+    - name: 🧹 Удаление ключа
+      if: always()
+      run: rm -f service-account.json
