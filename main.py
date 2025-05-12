@@ -58,12 +58,6 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-# Маскирование облаков по SCL
-def mask_clouds(img):
-    scl = img.select("SCL")
-    cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
-    return img.updateMask(cloud_mask)
-
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
     try:
@@ -103,6 +97,7 @@ def update_sheet(sheets_client):
     .sort("CLOUDY_PIXEL_PERCENTAGE") \
     .map(mask_clouds) \
     .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
+         .resample("bicubic"))
 
 
                 # Проверка наличия снимков
@@ -113,11 +108,6 @@ def update_sheet(sheets_client):
 
                 # Мозаика
                 mosaic = collection.mosaic().clip(geometry)
-
-                # Применим сглаживание (гауссов фильтр)
-                var kernel = ee.Kernel.gaussian({
-                radius: 1.2, sigma: 1.2, units: 'pixels', normalize: true});
-                var smoothed = mosaic.convolve(kernel);
 
                 # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
