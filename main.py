@@ -58,6 +58,12 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
+# Маскирование облаков по SCL
+def mask_clouds(img):
+    scl = img.select("SCL")
+    cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
+    return img.updateMask(cloud_mask)
+
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
     try:
@@ -89,14 +95,16 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # Коллекция изображений (без маскировки облаков, ускорено)
+                # Коллекция изображений
                 collection = ee.ImageCollection("COPERNICUS/S2_SR") \
-                    .filterDate(start, end) \
-                    .filterBounds(geometry) \
-                    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60)) \
-                    .sort("CLOUDY_PIXEL_PERCENTAGE") \
-                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])) \
-                    .limit(5)
+    .filterDate(start, end) \
+    .filterBounds(geometry) \
+    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60)) \
+    .sort("CLOUDY_PIXEL_PERCENTAGE") \
+    .map(mask_clouds) \
+    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
+         .resample("bicubic"))
+
 
                 # Проверка наличия снимков
                 count = collection.size().getInfo()
@@ -105,20 +113,18 @@ def update_sheet(sheets_client):
                     continue
 
                 # Мозаика
-                mosaic = collection.mosaic()
+                mosaic = collection.mosaic().clip(geometry)
 
-                # Визуализация с clip прямо внутри
+                # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                vis_image = mosaic.visualize(**vis).clip(geometry)
-
                 tile_info = ee.data.getMapId({
-                    "image": vis_image
+                    "image": mosaic,
+                    "visParams": vis
                 })
                 mapid = tile_info["mapid"]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
-                print(f"✅ {region} — {date_str} — ссылка обновлена")
 
             except Exception as e:
                 log_error(f"Строка {row_idx}", e)
