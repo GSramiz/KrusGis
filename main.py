@@ -97,14 +97,13 @@ def update_sheet(sheets_client):
 
                 # Коллекция изображений
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
-    .filterDate(start, end) \
-    .filterBounds(geometry) \
-    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
-    .sort("CLOUDY_PIXEL_PERCENTAGE") \
-    .map(mask_clouds) \
-    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
-         .resample("bicubic"))
-
+                    .filterDate(start, end) \
+                    .filterBounds(geometry) \
+                    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
+                    .sort("CLOUDY_PIXEL_PERCENTAGE") \
+                    .map(mask_clouds) \
+                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
+                         .resample("bicubic"))
 
                 # Проверка наличия снимков
                 count = collection.size().getInfo()
@@ -122,6 +121,8 @@ def update_sheet(sheets_client):
                     "visParams": vis
                 })
                 mapid = tile_info["mapid"]
+
+                # ✅ Формируем корректный XYZ URL без вложенных путей
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
