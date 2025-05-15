@@ -124,16 +124,12 @@ def update_sheet(sheets_client):
                 # Умная мозаика по cloudScore
                 mosaic = collection.qualityMosaic("cloudScore")
 
-                # Визуализация вручную (gamma + сглаживание)
-                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]) \
-                                   .clip(geometry) \
-                                   .resample("bicubic") \
-                                   .visualize(min=0, max=255, gamma=1.3)
-
+                 Визуализация
+                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
                 tile_info = ee.data.getMapId({
-                    "image": visualized
+                    "image": mosaic,
+                    "visParams": vis
                 })
-
                 raw_mapid = tile_info["mapid"]
                 clean_mapid = raw_mapid.split("/")[-1]  # удаляем всё до последнего /
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
