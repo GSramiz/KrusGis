@@ -61,16 +61,15 @@ def get_geometry_from_asset(region_name):
 # Маскирование облаков по SCL
 def mask_clouds(img):
     scl = img.select("SCL")
-    cloud_mask = (
-        scl.neq(3)   # облака
-        .And(scl.neq(7))   # высокие облака
-        .And(scl.neq(8))   # облака
-        .And(scl.neq(9))   # туман/haze
-        .And(scl.neq(10))  # cirrus
-        .And(scl.neq(0))   # дефекты/мусор
-    )
+    cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(cloud_mask)
-    
+
+# Добавление cloudScore к каждому изображению
+def add_cloud_score(img):
+    cloudiness = ee.Number(img.get("CLOUDY_PIXEL_PERCENTAGE"))
+    cloud_score = ee.Image.constant(100).subtract(cloudiness).rename("cloudScore")
+    return img.addBands(cloud_score)
+
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
     try:
@@ -102,39 +101,29 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # Добавление cloudScore к каждому изображению
-def add_cloud_score(img):
-    cloudiness = ee.Number(img.get("CLOUDY_PIXEL_PERCENTAGE"))
-    cloud_score = ee.Image.constant(100).subtract(cloudiness).rename("cloudScore")
-    return img.addBands(cloud_score)
-                
-                # Коллекция изображений
-collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
-    .filterDate(start, end) \
-    .filterBounds(geometry) \
-    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
-    .map(mask_clouds) \
-    .map(add_cloud_score) \
-    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B", "cloudScore"])
-         .resample("bicubic"))
+                collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
+                    .filterDate(start, end) \
+                    .filterBounds(geometry) \
+                    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
+                    .map(mask_clouds) \
+                    .map(add_cloud_score) \
+                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B", "cloudScore"]).resample("bicubic"))
 
-                # Проверка наличия снимков
                 count = collection.size().getInfo()
                 if count == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-               # Мозаика — по cloudScore
-mosaic = collection.qualityMosaic("cloudScore").clip(geometry)
+                mosaic = collection.qualityMosaic("cloudScore").clip(geometry)
 
-                # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
                 tile_info = ee.data.getMapId({
                     "image": mosaic,
                     "visParams": vis
                 })
+
                 raw_mapid = tile_info["mapid"]
-                clean_mapid = raw_mapid.split("/")[-1]  # удаляем всё до последнего /
+                clean_mapid = raw_mapid.split("/")[-1]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
@@ -147,7 +136,6 @@ mosaic = collection.qualityMosaic("cloudScore").clip(geometry)
         log_error("update_sheet", e)
         raise
 
-# Точка входа
 if __name__ == "__main__":
     try:
         client = initialize_services()
