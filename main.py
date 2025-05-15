@@ -121,34 +121,33 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Умная мозаика
+                               # Умная мозаика
                 mosaic = collection.qualityMosaic("cloudScore")
 
-           # Визуализация
+                # Визуализация
+                vis = {
+                    "bands": ["TCI_R", "TCI_G", "TCI_B"],
+                    "min": 0,
+                    "max": 255,
+                    "gamma": 1.3
+                }
 
-try:
-    vis = {
-        "bands": ["TCI_R", "TCI_G", "TCI_B"],
-        "min": 0,
-        "max": 255,
-        "gamma": 1.3
-    }
+                try:
+                    mosaic_clipped = mosaic.clip(geometry).resample("bicubic")
 
-    mosaic_clipped = mosaic.clip(geometry).resample("bicubic")
+                    tile_info = ee.data.getMapId({
+                        "image": mosaic_clipped,
+                        "visParams": vis
+                    })
 
-    tile_info = ee.data.getMapId({
-        "image": mosaic_clipped,
-        "visParams": vis
-    })
+                    raw_mapid = tile_info["mapid"]
+                    clean_mapid = raw_mapid.split("/")[-1]
+                    xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
+                    worksheet.update_cell(row_idx, 3, xyz)
 
-    raw_mapid = tile_info["mapid"]
-    clean_mapid = raw_mapid.split("/")[-1]
-    xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
-    worksheet.update_cell(row_idx, 3, xyz)
-
-except Exception as e:
-    log_error(f"MapID (строка {row_idx})", e)
-    worksheet.update_cell(row_idx, 3, f"Ошибка загрузки mapid: {str(e)[:100]}")
+                except Exception as e:
+                    log_error(f"MapID (строка {row_idx})", e)
+                    worksheet.update_cell(row_idx, 3, f"Ошибка загрузки mapid: {str(e)[:100]}")
 
 # Точка входа
 if __name__ == "__main__":
