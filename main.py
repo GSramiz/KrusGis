@@ -135,7 +135,9 @@ def update_sheet(sheets_client):
                 })
 
                 raw_mapid = tile_info["mapid"]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{raw_mapid}/tiles/{{z}}/{{x}}/{{y}}"
+                clean_mapid = raw_mapid.split("/")[-1]  # удаляем всё до последнего /
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
+
                 worksheet.update_cell(row_idx, 3, xyz)
 
             except Exception as e:
