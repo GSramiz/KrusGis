@@ -121,7 +121,7 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                               # Умная мозаика
+                # Умная мозаика
                 mosaic = collection.qualityMosaic("cloudScore")
 
                 # Визуализация
@@ -148,6 +148,14 @@ def update_sheet(sheets_client):
                 except Exception as e:
                     log_error(f"MapID (строка {row_idx})", e)
                     worksheet.update_cell(row_idx, 3, f"Ошибка загрузки mapid: {str(e)[:100]}")
+
+            except Exception as e:
+                log_error(f"Строка {row_idx}", e)
+                worksheet.update_cell(row_idx, 3, f"Ошибка: {str(e)[:100]}")
+
+    except Exception as e:
+        log_error("update_sheet", e)
+        raise
 
 # Точка входа
 if __name__ == "__main__":
