@@ -124,7 +124,7 @@ def update_sheet(sheets_client):
                 # Умная мозаика по cloudScore
                 mosaic = collection.qualityMosaic("cloudScore")
 
-                 Визуализация
+                # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
                 tile_info = ee.data.getMapId({
                     "image": mosaic,
