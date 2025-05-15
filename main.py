@@ -58,29 +58,11 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-# Маскирование облаков по SCL
-def mask_clouds(img):
-    scl = img.select("SCL")
-    cloud_mask = (
-        scl.neq(3)   # облака
-        .And(scl.neq(7))   # высокие облака
-        .And(scl.neq(8))   # облака
-        .And(scl.neq(9))   # туман/haze
-        .And(scl.neq(10))  # cirrus
-        .And(scl.neq(0))   # дефекты/мусор
-    )
-    return img.updateMask(cloud_mask)
-
-# Добавление cloudScore к каждому изображению
-def add_cloud_score(img):
-    cloudiness = ee.Number(img.get("CLOUDY_PIXEL_PERCENTAGE"))
-    cloud_score = ee.Image.constant(100).subtract(cloudiness).rename("cloudScore")
-    return img.addBands(cloud_score)
-
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
     try:
         print("\n📊 Обновление таблицы")
+
         SPREADSHEET_ID = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
         SHEET_NAME = "Sentinel-2 Покрытие"
 
@@ -112,8 +94,10 @@ def update_sheet(sheets_client):
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
                     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
+                    .sort("CLOUDY_PIXEL_PERCENTAGE") \
                     .map(mask_clouds) \
-                    .map(add_cloud_score)
+                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
+                         .resample("bicubic"))
 
                 # Проверка наличия снимков
                 count = collection.size().getInfo()
@@ -121,8 +105,21 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Умная мозаика по cloudScore
-                mosaic = collection.qualityMosaic("cloudScore")
+                # Маскирование облаков по SCL
+                def mask_clouds(img):
+    scl = img.select("SCL")
+    cloud_mask = (
+        scl.neq(3)   # облака
+        .And(scl.neq(7))   # высокие облака
+        .And(scl.neq(8))   # облака
+        .And(scl.neq(9))   # туман/haze
+        .And(scl.neq(10))  # cirrus
+        .And(scl.neq(0))   # дефекты/мусор
+    )
+    return img.updateMask(cloud_mask)
+    
+                # Мозаика
+                mosaic = collection.mosaic().clip(geometry)
 
                 # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
