@@ -121,10 +121,10 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Умная мозаика
+                # Умная мозаика по cloudScore
                 mosaic = collection.qualityMosaic("cloudScore")
 
-                # Визуализация
+                # Визуализация (насыщенность + сглаживание)
                 vis = {
                     "bands": ["TCI_R", "TCI_G", "TCI_B"],
                     "min": 0,
@@ -133,10 +133,8 @@ def update_sheet(sheets_client):
                 }
 
                 try:
-                    mosaic_clipped = mosaic.clip(geometry).resample("bicubic")
-
                     tile_info = ee.data.getMapId({
-                        "image": mosaic_clipped,
+                        "image": mosaic.clip(geometry).resample("bicubic"),
                         "visParams": vis
                     })
 
