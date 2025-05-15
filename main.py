@@ -58,6 +58,19 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
+# Маскирование облаков по SCL
+def mask_clouds(img):
+    scl = img.select("SCL")
+    cloud_mask = (
+        scl.neq(3)   # облака
+        .And(scl.neq(7))   # высокие облака
+        .And(scl.neq(8))   # облака
+        .And(scl.neq(9))   # туман/haze
+        .And(scl.neq(10))  # cirrus
+        .And(scl.neq(0))   # дефекты/мусор
+    )
+    return img.updateMask(cloud_mask)
+    
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
     try:
@@ -105,19 +118,6 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Маскирование облаков по SCL
-                def mask_clouds(img):
-    scl = img.select("SCL")
-    cloud_mask = (
-        scl.neq(3)   # облака
-        .And(scl.neq(7))   # высокие облака
-        .And(scl.neq(8))   # облака
-        .And(scl.neq(9))   # туман/haze
-        .And(scl.neq(10))  # cirrus
-        .And(scl.neq(0))   # дефекты/мусор
-    )
-    return img.updateMask(cloud_mask)
-    
                 # Мозаика
                 mosaic = collection.mosaic().clip(geometry)
 
