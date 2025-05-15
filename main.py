@@ -124,28 +124,19 @@ def update_sheet(sheets_client):
                 # Умная мозаика по cloudScore
                 mosaic = collection.qualityMosaic("cloudScore")
 
-                # Визуализация (насыщенность + сглаживание)
-                vis = {
-                    "bands": ["TCI_R", "TCI_G", "TCI_B"],
-                    "min": 0,
-                    "max": 255,
-                    "gamma": 1.3
-                }
+                # Визуализация вручную (gamma + сглаживание)
+                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]) \
+                                   .clip(geometry) \
+                                   .resample("bicubic") \
+                                   .visualize(min=0, max=255, gamma=1.3)
 
-                try:
-                    tile_info = ee.data.getMapId({
-                        "image": mosaic.clip(geometry).resample("bicubic"),
-                        "visParams": vis
-                    })
+                tile_info = ee.data.getMapId({
+                    "image": visualized
+                })
 
-                    raw_mapid = tile_info["mapid"]
-                    clean_mapid = raw_mapid.split("/")[-1]
-                    xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
-                    worksheet.update_cell(row_idx, 3, xyz)
-
-                except Exception as e:
-                    log_error(f"MapID (строка {row_idx})", e)
-                    worksheet.update_cell(row_idx, 3, f"Ошибка загрузки mapid: {str(e)[:100]}")
+                raw_mapid = tile_info["mapid"]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{raw_mapid}/tiles/{{z}}/{{x}}/{{y}}"
+                worksheet.update_cell(row_idx, 3, xyz)
 
             except Exception as e:
                 log_error(f"Строка {row_idx}", e)
