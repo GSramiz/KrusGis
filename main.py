@@ -102,15 +102,21 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
+                # Добавление cloudScore к каждому изображению
+def add_cloud_score(img):
+    cloudiness = ee.Number(img.get("CLOUDY_PIXEL_PERCENTAGE"))
+    cloud_score = ee.Image.constant(100).subtract(cloudiness).rename("cloudScore")
+    return img.addBands(cloud_score)
+                
                 # Коллекция изображений
-                collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
-                    .filterDate(start, end) \
-                    .filterBounds(geometry) \
-                    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
-                    .sort("CLOUDY_PIXEL_PERCENTAGE") \
-                    .map(mask_clouds) \
-                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"])
-                         .resample("bicubic"))
+collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
+    .filterDate(start, end) \
+    .filterBounds(geometry) \
+    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
+    .map(mask_clouds) \
+    .map(add_cloud_score) \
+    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B", "cloudScore"])
+         .resample("bicubic"))
 
                 # Проверка наличия снимков
                 count = collection.size().getInfo()
@@ -118,8 +124,8 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Мозаика
-                mosaic = collection.mosaic().clip(geometry)
+               # Мозаика — по cloudScore
+mosaic = collection.qualityMosaic("cloudScore").clip(geometry)
 
                 # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
