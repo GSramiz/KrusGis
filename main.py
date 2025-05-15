@@ -124,38 +124,30 @@ def update_sheet(sheets_client):
                 # Умная мозаика
                 mosaic = collection.qualityMosaic("cloudScore")
 
-                # Визуализация
-                vis = {
-                    "bands": ["TCI_R", "TCI_G", "TCI_B"],
-                    "min": 0,
-                    "max": 255,
-                    "gamma": 1.3
-                }
+           # Визуализация
+vis = {
+    "bands": ["TCI_R", "TCI_G", "TCI_B"],
+    "min": 0,
+    "max": 255,
+    "gamma": 1.3
+}
 
-                try:
-                    tile_info = ee.data.getMapId({
-                        "image": mosaic.clip(geometry)
-                                       .select(["TCI_R", "TCI_G", "TCI_B"])
-                                       .resample("bicubic")
-                                       .visualize(**vis)
-                    })
+# Применим clip и resample заранее
+mosaic_clipped = mosaic.clip(geometry).resample("bicubic")
 
-                    raw_mapid = tile_info["mapid"]
-                    clean_mapid = raw_mapid.split("/")[-1]
-                    xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
-                    worksheet.update_cell(row_idx, 3, xyz)
+# Получаем MapID с visParams
+tile_info = ee.data.getMapId({
+    "image": mosaic_clipped,
+    "visParams": vis
+})
 
-                except Exception as e:
-                    log_error(f"MapID (строка {row_idx})", e)
-                    worksheet.update_cell(row_idx, 3, f"Ошибка загрузки mapid: {str(e)[:100]}")
+# Сборка XYZ-ссылки
+raw_mapid = tile_info["mapid"]
+clean_mapid = raw_mapid.split("/")[-1]
+xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
-            except Exception as e:
-                log_error(f"Строка {row_idx}", e)
-                worksheet.update_cell(row_idx, 3, f"Ошибка: {str(e)[:100]}")
-
-    except Exception as e:
-        log_error("update_sheet", e)
-        raise
+# Запись в таблицу
+worksheet.update_cell(row_idx, 3, xyz)
 
 # Точка входа
 if __name__ == "__main__":
