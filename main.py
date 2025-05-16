@@ -6,6 +6,7 @@ import traceback
 def log_error(context, error):
     print(f"\n❌ ОШИБКА в {context}:")
     print(f"Тип: {type(error).__name__}")
+    print(f"Сообщение: {str(error)}")
     traceback.print_exc()
     print("=" * 50)
 
@@ -35,76 +36,81 @@ def mask_clouds(img):
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(cloud_mask)
 
-def build_optimal_mosaic(region_name, start, end, min_coverage=0.95):
+def get_footprint_coverage(img, region):
+    footprint = img.geometry()
+    intersection = footprint.intersection(region, ee.ErrorMargin(1))
+    inter_area = intersection.area()
+    region_area = region.area()
+    coverage_ratio = inter_area.divide(region_area)
+    return coverage_ratio
+
+def build_mosaic_by_coverage(collection, region, min_coverage=0.95):
+    sorted_imgs = collection.sort("CLOUDY_PIXEL_PERCENTAGE")
+
+    def accumulate(img, acc):
+        coverage_so_far = ee.List(acc).get(0)
+        imgs_so_far = ee.List(acc).get(1)
+
+        cov = get_footprint_coverage(img, region)
+        new_coverage = ee.Number(coverage_so_far).add(cov)
+
+        should_add = new_coverage.lt(min_coverage)
+        updated_imgs = ee.Algorithms.If(should_add,
+                                        imgs_so_far.add(img),
+                                        imgs_so_far)
+        updated_cov = ee.Algorithms.If(should_add,
+                                      new_coverage,
+                                      coverage_so_far)
+        return [updated_cov, updated_imgs]
+
+    init = [ee.Number(0), ee.List([])]
+
+    result = sorted_imgs.iterate(accumulate, init)
+    coverage_final = ee.List(result).get(0)
+    images_final = ee.List(result).get(1)
+
+    final_collection = ee.ImageCollection(images_final)
+    mosaic = final_collection.mosaic().resample("bicubic").clip(region)
+    return mosaic
+
+def main():
     try:
-        print(f"\n🗺️ Регион: {region_name}, период: {start} → {end}")
+        initialize_services()
+
+        region_name = "Алтайский край"
+        start_date = "2022-05-01"
+        end_date = "2022-06-01"
+
+        print(f"\n🗺️ Регион: {region_name}, период: {start_date} → {end_date}")
         geometry = get_geometry_from_asset(region_name)
 
-        # Получаем полную коллекцию
         collection = (
             ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-            .filterDate(start, end)
+            .filterDate(start_date, end_date)
             .filterBounds(geometry)
             .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40))
             .map(mask_clouds)
-            .map(lambda img: img.resample("bicubic").select(["TCI_R", "TCI_G", "TCI_B"]))
-            .sort("CLOUDY_PIXEL_PERCENTAGE")
+            .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"]).resample("bicubic"))
         )
 
-        # Переходим к покрытию
-        def accumulate_images(image_list, geom, min_area):
-            total = ee.Image(0).updateMask(ee.Image(0).mask())  # пустая
-            area = 0
-            index = 0
-            while_area = ee.Number(0)
-            result_list = []
+        # Строим мозаику, покрывающую 95% региона
+        mosaic = build_mosaic_by_coverage(collection, geometry, min_coverage=0.95)
 
-            while True:
-                img = ee.Image(image_list.get(index))
-                total = total.unmask().blend(img)
-                covered = total.mask().reduceRegion(
-                    reducer=ee.Reducer.sum(),
-                    geometry=geom,
-                    scale=20,
-                    maxPixels=1e9
-                ).get("TCI_R")
-                area = ee.Number(covered)
-                if area.divide(geom.area()).getInfo() >= min_area:
-                    result_list.append(img)
-                    break
-                result_list.append(img)
-                index += 1
-            return ee.ImageCollection(result_list)
+        vis_params = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
 
-        image_list = collection.toList(collection.size())
-        geom_area = geometry.area()
-        optimal_images = accumulate_images(image_list, geometry, min_coverage)
-        print("📸 Используем снимков:", optimal_images.size().getInfo())
-
-        mosaic = optimal_images.mosaic().clip(geometry)
-
-        vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
         tile_info = ee.data.getMapId({
             "image": mosaic,
-            "visParams": vis
+            "visParams": vis_params
         })
-        mapid = tile_info["mapid"].split("/")[-1]
-        xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
+
+        clean_mapid = tile_info["mapid"].split("/")[-1]
+        xyz_url = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
         print("\n✅ Мозаика построена. XYZ-ссылка:")
-        print(xyz)
+        print(xyz_url)
 
-    except Exception as e:
-        log_error("build_optimal_mosaic", e)
-
-if __name__ == "__main__":
-    try:
-        initialize_services()
-        build_optimal_mosaic(
-            region_name="Алтайский край",
-            start="2022-05-01",
-            end="2022-06-01"
-        )
     except Exception as e:
         log_error("main", e)
-        exit(1)
+
+if __name__ == "__main__":
+    main()
