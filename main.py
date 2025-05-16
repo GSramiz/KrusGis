@@ -100,7 +100,6 @@ def main():
             .filterBounds(geometry)
             .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40))
             .map(mask_clouds)
-            .map(lambda img: img.resample("bicubic").select(["TCI_R", "TCI_G", "TCI_B"]))
         )
 
         count = collection.size().getInfo()
