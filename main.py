@@ -17,9 +17,7 @@ def log_error(context, error):
 def initialize_services():
     try:
         print("\n🔧 Инициализация сервисов...")
-
         service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
-
         credentials = ee.ServiceAccountCredentials(
             service_account_info["client_email"],
             key_data=json.dumps(service_account_info)
@@ -58,25 +56,24 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-# Маскирование облаков и добавление оценки качества
+# Подготовка изображения: маскирование облаков, расчёт "score"
 def prepare_image(img):
     scl = img.select("SCL")
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     img = img.updateMask(cloud_mask)
 
-    # Чем ниже облачность, тем выше "оценка качества"
-    score = img.select("CLOUDY_PIXEL_PERCENTAGE").multiply(-1).rename("score")
+    cloud_pct = ee.Number(img.get("CLOUDY_PIXEL_PERCENTAGE"))
+    score = ee.Image.constant(cloud_pct.multiply(-1)).rename("score") \
+             .updateMask(img.mask().reduce(ee.Reducer.min()))
 
-    return img.select(["TCI_R", "TCI_G", "TCI_B"]) \
-              .resample("bicubic") \
+    return img.select(["TCI_R", "TCI_G", "TCI_B"]).resample("bicubic") \
               .addBands(score) \
               .copyProperties(img, img.propertyNames())
 
-# Основная логика обновления таблицы
+# Обновление таблицы
 def update_sheet(sheets_client):
     try:
         print("\n📊 Обновление таблицы")
-
         SPREADSHEET_ID = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
         SHEET_NAME = "Sentinel-2 Покрытие"
 
@@ -99,22 +96,23 @@ def update_sheet(sheets_client):
                 start = f"{year}-{month_num}-01"
                 end = ee.Date(start).advance(1, "month")
 
-                print(f"\n🌍 {region} — {start} - {end.format('YYYY-MM-dd').getInfo()}")
+                print(f"\n🌍 {region} — {start} - {end}")
 
                 geometry = get_geometry_from_asset(region)
 
-                # Подбор изображений
+                # Коллекция изображений
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
                     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
                     .map(prepare_image)
 
+                # Проверка наличия изображений
                 if collection.size().getInfo() == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Создание мозаики по приоритету наименьшей облачности
+                # Построение мозаики по наименьшей облачности
                 mosaic = collection.qualityMosaic("score").clip(geometry)
 
                 # Визуализация
