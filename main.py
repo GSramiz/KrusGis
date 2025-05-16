@@ -64,12 +64,6 @@ def mask_clouds(img):
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(cloud_mask)
 
-# Добавление cloudScore к каждому изображению
-def add_cloud_score(img):
-    cloudiness = ee.Number(img.get("CLOUDY_PIXEL_PERCENTAGE"))
-    cloud_score = ee.Image.constant(100).subtract(cloudiness).rename("cloudScore")
-    return img.addBands(cloud_score)
-
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
     try:
@@ -101,24 +95,30 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
+                # Коллекция Sentinel-2 с маской облаков
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
                     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
                     .map(mask_clouds) \
-                    .map(add_cloud_score) \
-                    .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B", "cloudScore"]).resample("bicubic"))
+                    .map(lambda img: img.addBands(img.select("B8")))  # Добавляем B8 для qualityMosaic
 
                 count = collection.size().getInfo()
                 if count == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                mosaic = collection.qualityMosaic("cloudScore").clip(geometry)
+                # Quality mosaic по яркости в NIR
+                best = collection.qualityMosaic('B8')
+
+                # Выбор RGB каналов и визуализация
+                mosaic_rgb = best.select(["TCI_R", "TCI_G", "TCI_B"]) \
+                                  .resample("bicubic") \
+                                  .clip(geometry)
 
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
                 tile_info = ee.data.getMapId({
-                    "image": mosaic,
+                    "image": mosaic_rgb,
                     "visParams": vis
                 })
 
@@ -136,6 +136,7 @@ def update_sheet(sheets_client):
         log_error("update_sheet", e)
         raise
 
+# Точка входа
 if __name__ == "__main__":
     try:
         client = initialize_services()
