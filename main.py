@@ -58,32 +58,21 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-# Маскирование облаков по SCL
-def mask_clouds(img):
+# Маскирование облаков и добавление оценки качества
+def prepare_image(img):
     scl = img.select("SCL")
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
-    return img.updateMask(cloud_mask)
+    img = img.updateMask(cloud_mask)
 
-# Растяжка значений по перцентилям
-def stretch_visualization(image, geometry):
-    stats = image.reduceRegion(
-        reducer=ee.Reducer.percentile([2, 98]),
-        geometry=geometry,
-        scale=20,
-        bestEffort=True
-    )
+    # Чем ниже облачность, тем выше "оценка качества"
+    score = img.select("CLOUDY_PIXEL_PERCENTAGE").multiply(-1).rename("score")
 
-    bands = ["B4", "B3", "B2"]
-    min_vals = [stats.get(f"{b}_p2") for b in bands]
-    max_vals = [stats.get(f"{b}_p98") for b in bands]
+    return img.select(["TCI_R", "TCI_G", "TCI_B"]) \
+              .resample("bicubic") \
+              .addBands(score) \
+              .copyProperties(img, img.propertyNames())
 
-    return image.visualize(
-        bands=bands,
-        min=min_vals,
-        max=max_vals
-    )
-
-# Обновление таблицы
+# Основная логика обновления таблицы
 def update_sheet(sheets_client):
     try:
         print("\n📊 Обновление таблицы")
@@ -114,27 +103,29 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # Коллекция Sentinel-2 с маской облаков и выбором RGB-каналов
+                # Подбор изображений
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
                     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
-                    .map(mask_clouds) \
-                    .map(lambda img: img.select(["B2", "B3", "B4", "B8"]))
+                    .map(prepare_image)
 
                 if collection.size().getInfo() == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Выбор наиболее ярких пикселей на основе NIR (B8)
-                best = collection.qualityMosaic("B8")
+                # Создание мозаики по приоритету наименьшей облачности
+                mosaic = collection.qualityMosaic("score").clip(geometry)
 
-                # Растяжка визуализации по перцентилям
-                visual = stretch_visualization(best, geometry).clip(geometry)
-
-                tile_info = ee.data.getMapId({"image": visual})
-                mapid = tile_info["mapid"]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
+                # Визуализация
+                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
+                tile_info = ee.data.getMapId({
+                    "image": mosaic,
+                    "visParams": vis
+                })
+                raw_mapid = tile_info["mapid"]
+                clean_mapid = raw_mapid.split("/")[-1]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
 
