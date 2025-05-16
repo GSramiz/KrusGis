@@ -25,52 +25,65 @@ def initialize_services():
         raise
 
 def get_geometry_from_asset(region_name):
-    fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
-    region = fc.filter(ee.Filter.eq("title", region_name)).first()
-    if region is None:
-        raise ValueError(f"Регион '{region_name}' не найден в ассете")
-    return region.geometry()
+    try:
+        fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
+        region = fc.filter(ee.Filter.eq("title", region_name)).first()
+        if region is None:
+            raise ValueError(f"Регион '{region_name}' не найден в ассете")
+        return region.geometry()
+    except Exception as e:
+        log_error("get_geometry_from_asset", e)
+        raise
 
 def mask_clouds(img):
     scl = img.select("SCL")
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(cloud_mask)
 
-def get_footprint_coverage(img, region):
-    footprint = img.geometry()
-    intersection = footprint.intersection(region, ee.ErrorMargin(1))
-    inter_area = intersection.area()
-    region_area = region.area()
-    coverage_ratio = inter_area.divide(region_area)
-    return coverage_ratio
+def get_footprint_coverage(image, region_geom):
+    # Получаем маску, чтобы считать покрытие снимка по региону
+    footprint = image.geometry().intersection(region_geom, 1)
+    footprint_area = footprint.area(1)
+    region_area = region_geom.area(1)
+    # Вернуть отношение покрытой площади (число ee.Number)
+    return footprint_area.divide(region_area)
 
 def build_mosaic_by_coverage(collection, region, min_coverage=0.95):
     sorted_imgs = collection.sort("CLOUDY_PIXEL_PERCENTAGE")
 
     def accumulate(img, acc):
-        coverage_so_far = ee.List(acc).get(0)
-        imgs_so_far = ee.List(acc).get(1)
+        coverage_so_far = ee.Number(ee.List(acc).get(0))
+        imgs_so_far = ee.List(ee.List(acc).get(1))
 
         cov = get_footprint_coverage(img, region)
-        new_coverage = ee.Number(coverage_so_far).add(cov)
+        new_coverage = coverage_so_far.add(cov)
 
         should_add = new_coverage.lt(min_coverage)
-        updated_imgs = ee.Algorithms.If(should_add,
-                                        imgs_so_far.add(img),
-                                        imgs_so_far)
-        updated_cov = ee.Algorithms.If(should_add,
-                                      new_coverage,
-                                      coverage_so_far)
-        return [updated_cov, updated_imgs]
 
-    init = [ee.Number(0), ee.List([])]
+        updated_imgs = ee.Algorithms.If(
+            should_add,
+            imgs_so_far.add(img),
+            imgs_so_far
+        )
+
+        updated_cov = ee.Algorithms.If(
+            should_add,
+            new_coverage,
+            coverage_so_far
+        )
+
+        return ee.List([updated_cov, updated_imgs])
+
+    init = ee.List([ee.Number(0), ee.List([])])
 
     result = sorted_imgs.iterate(accumulate, init)
+
     coverage_final = ee.List(result).get(0)
     images_final = ee.List(result).get(1)
 
     final_collection = ee.ImageCollection(images_final)
     mosaic = final_collection.mosaic().resample("bicubic").clip(region)
+
     return mosaic
 
 def main():
@@ -90,10 +103,17 @@ def main():
             .filterBounds(geometry)
             .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40))
             .map(mask_clouds)
-            .map(lambda img: img.select(["TCI_R", "TCI_G", "TCI_B"]).resample("bicubic"))
+            .map(lambda img: img.resample("bicubic").select(["TCI_R", "TCI_G", "TCI_B"]))
+            # Сортировка по облачности ниже будет в accumulate
         )
 
-        # Строим мозаику, покрывающую 95% региона
+        count = collection.size().getInfo()
+        if count == 0:
+            print("❌ Нет снимков за указанный период")
+            return
+
+        print(f"📸 Используем снимков: {count}")
+
         mosaic = build_mosaic_by_coverage(collection, geometry, min_coverage=0.95)
 
         vis_params = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
@@ -102,9 +122,8 @@ def main():
             "image": mosaic,
             "visParams": vis_params
         })
-
-        clean_mapid = tile_info["mapid"].split("/")[-1]
-        xyz_url = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
+        mapid = tile_info["mapid"].split("/")[-1]
+        xyz_url = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
         print("\n✅ Мозаика построена. XYZ-ссылка:")
         print(xyz_url)
