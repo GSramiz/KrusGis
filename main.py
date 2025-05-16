@@ -76,12 +76,13 @@ def build_mosaic_by_coverage(collection, region, min_coverage=0.95):
 
     print("✅ Итоговое покрытие:", coverage_final.getInfo())
     print("✅ Выбранных снимков:", images_final.size().getInfo())
-
+    
     final_collection = ee.ImageCollection.fromImages(images_final)
+mosaic = final_collection.mosaic().resample("bicubic").clip(region)
+mosaic_filled = mosaic.unmask(0)  # <=== исправлено: заполнить прозрачные пиксели 0
 
-    mosaic = final_collection.mosaic().resample("bicubic").clip(region)
+return mosaic_filled
 
-    return mosaic
 
 # Основная функция
 def main():
