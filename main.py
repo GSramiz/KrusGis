@@ -5,7 +5,6 @@ import os
 import traceback
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Логирование ошибок
 def log_error(context, error):
     print(f"\n❌ ОШИБКА в {context}:")
     print(f"Тип: {type(error).__name__}")
@@ -13,7 +12,6 @@ def log_error(context, error):
     traceback.print_exc()
     print("=" * 50)
 
-# Инициализация Earth Engine и Google Sheets
 def initialize_services():
     try:
         print("\n🔧 Инициализация сервисов...")
@@ -41,7 +39,6 @@ def initialize_services():
         log_error("initialize_services", e)
         raise
 
-# Перевод месяца из строки в номер
 def month_str_to_number(name):
     months = {
         "Январь": "01", "Февраль": "02", "Март": "03", "Апрель": "04",
@@ -50,7 +47,6 @@ def month_str_to_number(name):
     }
     return months.get(name.strip().capitalize(), None)
 
-# Получение геометрии региона
 def get_geometry_from_asset(region_name):
     fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
     region = fc.filter(ee.Filter.eq("title", region_name)).first()
@@ -58,13 +54,11 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-# Маскирование облаков по SCL
 def mask_clouds(img):
     scl = img.select("SCL")
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(cloud_mask)
 
-# Основная логика обновления таблицы
 def update_sheet(sheets_client):
     try:
         print("\n📊 Обновление таблицы")
@@ -95,17 +89,21 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # Подготовка коллекции изображений
                 collection = (
                     ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
                     .filterDate(start, end)
                     .filterBounds(geometry)
                     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40))
                     .map(mask_clouds)
-                    .map(lambda img: img
-                         .addBands(img.metadata("CLOUDY_PIXEL_PERCENTAGE"))
-                         .set("score", ee.Number(img.get("CLOUDY_PIXEL_PERCENTAGE")).multiply(-1))
-                         .select(["TCI_R", "TCI_G", "TCI_B"]).resample("bicubic"))
+                    .map(lambda img: (
+                        img.addBands(
+                            ee.Image.constant(
+                                ee.Number(img.get("CLOUDY_PIXEL_PERCENTAGE")).multiply(-1)
+                            ).rename("score")
+                        )
+                        .select(["TCI_R", "TCI_G", "TCI_B", "score"])
+                        .resample("bicubic")
+                    ))
                 )
 
                 # Проверка наличия снимков
@@ -113,13 +111,8 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Построение мозайки с приоритетом по score
-                try:
-                    mosaic = collection.qualityMosaic("score").clip(geometry)
-                except Exception as e:
-                    print("⚠️ qualityMosaic не сработал, fallback на .mosaic()")
-                    collection = collection.sort("CLOUDY_PIXEL_PERCENTAGE")
-                    mosaic = collection.mosaic().clip(geometry)
+                # Мозаика по качеству (наименьшая облачность → max score)
+                mosaic = collection.qualityMosaic("score").clip(geometry)
 
                 # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
@@ -141,7 +134,6 @@ def update_sheet(sheets_client):
         log_error("update_sheet", e)
         raise
 
-# Точка входа
 if __name__ == "__main__":
     try:
         client = initialize_services()
