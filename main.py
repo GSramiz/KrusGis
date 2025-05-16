@@ -36,45 +36,69 @@ def mask_clouds(img):
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(cloud_mask)
 
-def calculate_coverage(masked_img, region):
-    mask = masked_img.mask().reduce(ee.Reducer.min())
-    area_image = ee.Image.pixelArea().updateMask(mask)
-    covered_area = area_image.reduceRegion(
-        reducer=ee.Reducer.sum(),
+def estimate_clear_coverage(img, region):
+    footprint = img.geometry().intersection(region, 1)
+    intersection_area = footprint.area(1)
+    cloudy = ee.Number(img.get('CLOUDY_PIXEL_PERCENTAGE'))
+    clear_area = intersection_area.multiply(ee.Number(1).subtract(cloudy.divide(100)))
+    return clear_area
+
+def build_mosaic_with_incremental_check(collection, region, min_coverage=0.95):
+    sorted_imgs = collection.sort("CLOUDY_PIXEL_PERCENTAGE")
+    region_area = region.area(1)
+
+    selected_imgs = []
+    total_clear_area = ee.Number(0)
+
+    imgs = sorted_imgs.toList(sorted_imgs.size())
+    count = imgs.size().getInfo()
+
+    for i in range(count):
+        img = ee.Image(imgs.get(i))
+        clear_area = estimate_clear_coverage(img, region)
+        total_clear_area = total_clear_area.add(clear_area)
+        selected_imgs.append(img)
+
+        if total_clear_area.divide(region_area).getInfo() >= min_coverage:
+            break
+
+    print(f"📸 Выбрано снимков по метаданным: {len(selected_imgs)}")
+
+    # Строим начальную мозаику
+    ic = ee.ImageCollection.fromImages(selected_imgs).map(mask_clouds)
+    mosaic = ic.mosaic().clip(region)
+
+    # Оцениваем фактическое покрытие
+    actual_coverage = mosaic.mask().reduceRegion(
+        reducer=ee.Reducer.mean(),
         geometry=region,
         scale=20,
         maxPixels=1e10
-    ).getNumber("area")
+    ).getInfo()
 
-    total_area = region.area(1)
-    return covered_area.divide(total_area)
+    coverage_value = list(actual_coverage.values())[0] if actual_coverage else 0
+    print(f"📐 Фактическое покрытие: {round(coverage_value * 100, 2)}%")
 
-def build_mosaic_with_iterative_coverage(collection, region, min_coverage=0.95):
-    sorted_imgs = collection.sort("CLOUDY_PIXEL_PERCENTAGE").toList(collection.size())
-    region_area = region.area(1)
+    # Если не хватает — добираем по одному
+    idx = len(selected_imgs)
+    while coverage_value < min_coverage and idx < count:
+        next_img = ee.Image(imgs.get(idx))
+        selected_imgs.append(next_img)
+        ic = ee.ImageCollection.fromImages(selected_imgs).map(mask_clouds)
+        mosaic = ic.mosaic().clip(region)
 
-    selected = []
-    cumulative = ee.Image(0).selfMask()  # пустая начальная маска
+        actual_coverage = mosaic.mask().reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=region,
+            scale=20,
+            maxPixels=1e10
+        ).getInfo()
 
-    i = 0
-    while i < sorted_imgs.size().getInfo():
-        img = ee.Image(sorted_imgs.get(i))
-        img_masked = mask_clouds(img).resample("bicubic").select(["TCI_R", "TCI_G", "TCI_B"])
-        selected.append(img_masked)
+        coverage_value = list(actual_coverage.values())[0] if actual_coverage else 0
+        print(f"➕ Добавлен снимок {idx+1}, новое покрытие: {round(coverage_value * 100, 2)}%")
+        idx += 1
 
-        mosaic = ee.ImageCollection(selected).mosaic().clip(region)
-
-        coverage = calculate_coverage(mosaic, region).getInfo()
-        print(f"🧩 [{i+1}] Покрытие: {round(coverage*100, 2)}%")
-
-        if coverage >= min_coverage:
-            break
-        i += 1
-
-    print(f"📸 Выбрано снимков: {len(selected)}")
-
-    final_mosaic = ee.ImageCollection(selected).mosaic().clip(region)
-    return final_mosaic
+    return mosaic
 
 def test_mosaic_region():
     try:
@@ -94,7 +118,7 @@ def test_mosaic_region():
 
         print(f"📥 Доступно снимков: {raw_collection.size().getInfo()}")
 
-        mosaic = build_mosaic_with_iterative_coverage(raw_collection, geometry, min_coverage=0.95)
+        mosaic = build_mosaic_with_incremental_check(raw_collection, geometry, min_coverage=0.95)
 
         vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
         tile_info = ee.data.getMapId({
