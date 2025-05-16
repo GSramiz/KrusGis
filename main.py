@@ -1,14 +1,17 @@
 import ee
+import json
 
-# Инициализация Earth Engine
 def initialize_services():
-    ee.Initialize()
-    print("✅ EE инициализирован")
+    try:
+        with open("service-account.json") as f:
+            service_account_info = json.load(f)
 
-# Логирование ошибок
-def log_error(func_name, exc):
-    print(f"❌ ОШИБКА в {func_name}:\nТип: {type(exc).__name__}\nСообщение: {exc}")
-
+        credentials = ee.ServiceAccountCredentials(service_account_info["client_email"], "service-account.json")
+        ee.Initialize(credentials)
+        print("✅ EE инициализирован через сервисный аккаунт")
+    except Exception as e:
+        print("❌ Ошибка инициализации EE:", e)
+        raise
 # Получение геометрии из пользовательского ассета
 def get_geometry_from_asset(region_name):
     try:
