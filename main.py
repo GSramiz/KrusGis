@@ -64,7 +64,26 @@ def mask_clouds(img):
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(cloud_mask)
 
-# Основная логика обновления таблицы
+# Растяжка значений по перцентилям
+def stretch_visualization(image, geometry):
+    stats = image.reduceRegion(
+        reducer=ee.Reducer.percentile([2, 98]),
+        geometry=geometry,
+        scale=20,
+        bestEffort=True
+    )
+
+    bands = ["B4", "B3", "B2"]
+    min_vals = [stats.get(f"{b}_p2") for b in bands]
+    max_vals = [stats.get(f"{b}_p98") for b in bands]
+
+    return image.visualize(
+        bands=bands,
+        min=min_vals,
+        max=max_vals
+    )
+
+# Обновление таблицы
 def update_sheet(sheets_client):
     try:
         print("\n📊 Обновление таблицы")
@@ -95,36 +114,27 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # Коллекция Sentinel-2 с маской облаков
+                # Коллекция Sentinel-2 с маской облаков и выбором RGB-каналов
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
                     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
                     .map(mask_clouds) \
-                    .map(lambda img: img.addBands(img.select("B8")))  # Добавляем B8 для qualityMosaic
+                    .map(lambda img: img.select(["B2", "B3", "B4", "B8"]))
 
-                count = collection.size().getInfo()
-                if count == 0:
+                if collection.size().getInfo() == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Quality mosaic по яркости в NIR
-                best = collection.qualityMosaic('B8')
+                # Выбор наиболее ярких пикселей на основе NIR (B8)
+                best = collection.qualityMosaic("B8")
 
-                # Выбор RGB каналов и визуализация
-                mosaic_rgb = best.select(["TCI_R", "TCI_G", "TCI_B"]) \
-                                  .resample("bicubic") \
-                                  .clip(geometry)
+                # Растяжка визуализации по перцентилям
+                visual = stretch_visualization(best, geometry).clip(geometry)
 
-                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                tile_info = ee.data.getMapId({
-                    "image": mosaic_rgb,
-                    "visParams": vis
-                })
-
-                raw_mapid = tile_info["mapid"]
-                clean_mapid = raw_mapid.split("/")[-1]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
+                tile_info = ee.data.getMapId({"image": visual})
+                mapid = tile_info["mapid"]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
 
