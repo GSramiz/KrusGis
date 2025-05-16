@@ -38,31 +38,32 @@ def mask_clouds(img):
 
 def build_mosaic_with_coverage(collection, region, min_coverage=0.95):
     sorted_imgs = collection.sort("CLOUDY_PIXEL_PERCENTAGE")
+
     region_area = region.area(1)
 
     def accumulate(img, acc):
         acc = ee.List(acc)
         coverage_so_far = ee.Number(acc.get(0))
         imgs_so_far = ee.List(acc.get(1))
-        
-        # Площадь снимка
-        footprint_area = img.geometry().area(1)
-        
-        # Облачность снимка (float)
+
+        # Пересечение снимка с регионом
+        intersection = img.geometry().intersection(region, 1)
+        intersection_area = intersection.area(1)
+
+        # Получаем облачность из метаданных
         cloudy = ee.Number(img.get('CLOUDY_PIXEL_PERCENTAGE'))
-        
-        # Чистая площадь снимка (без облаков)
-        clear_area = footprint_area.multiply(ee.Number(1).subtract(cloudy.divide(100)))
-        
-        # Новое покрытие региона (в долях)
+
+        # Чистая площадь снимка на территории региона
+        clear_area = intersection_area.multiply(ee.Number(1).subtract(cloudy.divide(100)))
+
+        # Новое покрытие с учетом этого снимка
         new_coverage = coverage_so_far.add(clear_area.divide(region_area))
-        
-        # Добавляем снимок, если ещё не достигли min_coverage
+
         should_add = new_coverage.lt(min_coverage)
-        
+
         updated_imgs = ee.Algorithms.If(should_add, imgs_so_far.add(img), imgs_so_far)
         updated_cov = ee.Algorithms.If(should_add, new_coverage, coverage_so_far)
-        
+
         return ee.List([updated_cov, updated_imgs])
 
     result = ee.List(sorted_imgs.iterate(accumulate, ee.List([ee.Number(0), ee.List([])])))
