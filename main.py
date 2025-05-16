@@ -38,7 +38,6 @@ def mask_clouds(img):
 
 def build_mosaic_with_coverage(collection, region, min_coverage=0.95):
     sorted_imgs = collection.sort("CLOUDY_PIXEL_PERCENTAGE")
-
     region_area = region.area(1)
 
     def accumulate(img, acc):
