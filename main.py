@@ -1,44 +1,48 @@
 import ee
 import json
+import os
+import traceback
+
+def log_error(context, error):
+    print(f"\n❌ ОШИБКА в {context}:")
+    print(f"Тип: {type(error).__name__}")
+    print(f"Сообщение: {str(error)}")
+    traceback.print_exc()
+    print("=" * 50)
 
 def initialize_services():
     try:
-        with open("service-account.json") as f:
-            service_account_info = json.load(f)
-
-        credentials = ee.ServiceAccountCredentials(service_account_info["client_email"], "service-account.json")
+        print("\n🔧 Инициализация Earth Engine...")
+        service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
+        credentials = ee.ServiceAccountCredentials(
+            service_account_info["client_email"],
+            key_data=json.dumps(service_account_info)
+        )
         ee.Initialize(credentials)
-        print("✅ EE инициализирован через сервисный аккаунт")
+        print("✅ EE инициализирован")
     except Exception as e:
-        print("❌ Ошибка инициализации EE:", e)
+        log_error("initialize_services", e)
         raise
 
 def get_geometry_from_asset(region_name):
-    try:
-        fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
-        region = fc.filter(ee.Filter.eq("title", region_name)).first()
-        if region is None:
-            raise ValueError(f"Регион '{region_name}' не найден в ассете")
-        return region.geometry()
-    except Exception as e:
-        print("❌ Ошибка get_geometry_from_asset:", e)
-        raise
+    fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
+    region = fc.filter(ee.Filter.eq("title", region_name)).first()
+    if region is None:
+        raise ValueError(f"Регион '{region_name}' не найден в ассете")
+    return region.geometry()
 
 def mask_clouds(img):
     scl = img.select("SCL")
-    mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
-    return img.updateMask(mask)
+    cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
+    return img.updateMask(cloud_mask)
 
 def get_footprint_coverage(img, region):
-    img_geom = img.geometry()
-    intersection = img_geom.intersection(region, 1)
-    inter_area = intersection.area(1)
+    inter = img.geometry().intersection(region, 1)
+    inter_area = inter.area(1)
     region_area = region.area(1)
-    coverage = inter_area.divide(region_area)
-    return coverage
+    return inter_area.divide(region_area)
 
-def build_mosaic_by_coverage(collection, region, min_coverage=0.95):
-    # Сортируем коллекцию по облачности
+def build_mosaic_with_coverage(collection, region, min_coverage=0.95):
     sorted_imgs = collection.sort("CLOUDY_PIXEL_PERCENTAGE")
 
     def accumulate(img, acc):
@@ -51,81 +55,69 @@ def build_mosaic_by_coverage(collection, region, min_coverage=0.95):
 
         should_add = new_coverage.lt(min_coverage)
 
-        updated_imgs = ee.Algorithms.If(
-            should_add,
-            imgs_so_far.add(img),
-            imgs_so_far
-        )
-
-        updated_cov = ee.Algorithms.If(
-            should_add,
-            new_coverage,
-            coverage_so_far
-        )
+        updated_imgs = ee.Algorithms.If(should_add, imgs_so_far.add(img), imgs_so_far)
+        updated_cov = ee.Algorithms.If(should_add, new_coverage, coverage_so_far)
 
         return ee.List([updated_cov, updated_imgs])
 
     init = ee.List([ee.Number(0), ee.List([])])
-
     result = ee.List(sorted_imgs.iterate(accumulate, init))
+    selected = ee.List(result.get(1))
 
-    coverage_final = ee.Number(result.get(0))
-    images_final = ee.List(result.get(1))
+    print("📸 Выбрано снимков:", selected.size().getInfo())
 
-    print("✅ Итоговое покрытие:", coverage_final.getInfo())
-    print("✅ Выбранных снимков:", images_final.size().getInfo())
+    # Маскируем только выбранные
+    processed = ee.ImageCollection.fromImages(
+        selected.map(lambda img: mask_clouds(img)
+                             .resample("bicubic")
+                             .select(["TCI_R", "TCI_G", "TCI_B"]))
+    )
 
-    final_collection = ee.ImageCollection.fromImages(images_final)
-    mosaic = final_collection.mosaic().resample("bicubic").clip(region)
-    mosaic_filled = mosaic.unmask(0)  # Заполняем прозрачные пиксели нулями
-    
-    return mosaic_filled
+    return processed.mosaic().clip(region)
 
-def main():
+def test_mosaic_region():
     try:
-        initialize_services()
-
         region_name = "Алтайский край"
-        start_date = "2022-05-01"
-        end_date = "2022-06-01"
+        start = "2022-05-01"
+        end = "2022-06-01"
 
-        print(f"\n🗺️ Регион: {region_name}, период: {start_date} → {end_date}")
+        print(f"\n🗺️ Регион: {region_name}, период: {start} → {end}")
         geometry = get_geometry_from_asset(region_name)
 
-        collection = (
+        raw_collection = (
             ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-            .filterDate(start_date, end_date)
+            .filterDate(start, end)
             .filterBounds(geometry)
             .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40))
-            .sort("CLOUDY_PIXEL_PERCENTAGE")  # Сортируем до маскировки
-            .map(mask_clouds)                 # Маскируем облака после сортировки
-            .map(lambda img: img.resample("bicubic").select(["TCI_R", "TCI_G", "TCI_B"]))
         )
 
-        count = collection.size().getInfo()
+        count = raw_collection.size().getInfo()
         if count == 0:
             print("❌ Нет снимков за указанный период")
             return
 
-        print(f"📸 Используем снимков: {count}")
+        print(f"📥 Доступно снимков: {count}")
 
-        mosaic = build_mosaic_by_coverage(collection, geometry, min_coverage=0.95)
+        mosaic = build_mosaic_with_coverage(raw_collection, geometry)
 
-        vis_params = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-
+        vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
         tile_info = ee.data.getMapId({
             "image": mosaic,
-            "visParams": vis_params
+            "visParams": vis
         })
-
         mapid = tile_info["mapid"].split("/")[-1]
-        xyz_url = f"https://earthengine.googleapis.com/v1/projects/earthengine-legacy/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
+        xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
         print("\n✅ Мозаика построена. XYZ-ссылка:")
-        print(xyz_url)
+        print(xyz)
 
     except Exception as e:
-        print("❌ Ошибка в main:", e)
+        log_error("test_mosaic_region", e)
 
 if __name__ == "__main__":
-    main()
+    try:
+        initialize_services()
+        test_mosaic_region()
+    except Exception as e:
+        log_error("main", e)
+        exit(1)
