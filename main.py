@@ -33,78 +33,74 @@ def get_geometry_from_asset(region_name):
 
 def mask_clouds(img):
     scl = img.select("SCL")
-    # Маскируем облака, облачную тень и низкую вероятность облачности
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
+    cloud_mask = cloud_mask.rename('mask')  # Обязательно 1 бэнд
     return img.updateMask(cloud_mask)
 
-def get_footprint_coverage(image, region):
-    # Возвращает долю покрытия image над region (маскированной части)
-    pixel_area = ee.Image.pixelArea()
-    masked_area = pixel_area.updateMask(image.mask()).clip(region).reduceRegion(
-        reducer=ee.Reducer.sum(),
-        geometry=region,
-        scale=10,
-        maxPixels=1e13
-    ).get('area')
-    region_area = pixel_area.clip(region).reduceRegion(
-        reducer=ee.Reducer.sum(),
-        geometry=region,
-        scale=10,
-        maxPixels=1e13
-    ).get('area')
-    return ee.Number(masked_area).divide(ee.Number(region_area))
+def build_mosaic_with_coverage(collection, geometry, min_coverage=0.95):
+    # Сначала применяем маску облаков ко всей коллекции
+    masked_collection = collection.map(mask_clouds)
 
-def build_mosaic_with_coverage(collection, region, min_coverage=0.95):
-    # Сортируем по облачности
-    sorted_imgs = collection.sort("CLOUDY_PIXEL_PERCENTAGE")
+    imgs = masked_collection.toList(masked_collection.size())
+    selected = ee.List([])
 
-    def accumulate(img, acc):
+    # Начинаем с пустой маски покрытия (монохромная)
+    coverage_mask = ee.Image(0).clip(geometry).mask().rename('mask')
+
+    total_area = geometry.area()
+
+    def iter_fun(i, acc):
         acc = ee.List(acc)
-        coverage_so_far = ee.Number(acc.get(0))
-        imgs_so_far = ee.List(acc.get(1))
+        img = ee.Image(imgs.get(i))
 
-        # Маскируем облака для текущего img
-        masked_img = mask_clouds(img)
+        # Получаем маску текущего изображения (монохромная)
+        img_mask = img.mask().rename('mask')
 
-        # Вычисляем покрытие маскированного изображения
-        cov = get_footprint_coverage(masked_img, region)
-        new_coverage = coverage_so_far.add(cov)
+        # Обновлённая маска покрытия — объединение с текущей
+        new_coverage_mask = coverage_mask.Or(img_mask).rename('mask')
 
-        should_add = new_coverage.lt(min_coverage)
-
-        updated_imgs = ee.Algorithms.If(
-            should_add,
-            imgs_so_far.add(img),  # добавляем исходное (немаскированное) изображение
-            imgs_so_far
+        # Вычисляем площадь покрытия новой маской
+        coverage_area_dict = new_coverage_mask.reduceRegion(
+            reducer=ee.Reducer.sum(),
+            geometry=geometry,
+            scale=10,
+            maxPixels=1e13
         )
 
-        updated_cov = ee.Algorithms.If(
-            should_add,
-            new_coverage,
-            coverage_so_far
+        coverage_area = ee.Number(coverage_area_dict.get('mask'))
+
+        coverage_ratio = coverage_area.divide(total_area)
+
+        def add_img():
+            nonlocal coverage_mask
+            coverage_mask = new_coverage_mask
+            return acc.add(img)
+
+        # Если покрытие < min_coverage, добавляем снимок, иначе пропускаем
+        return ee.Algorithms.If(
+            coverage_ratio.lt(min_coverage),
+            add_img(),
+            acc
         )
 
-        return ee.List([updated_cov, updated_imgs])
+    selected = ee.List(ee.List.sequence(0, imgs.size().subtract(1)).iterate(iter_fun, ee.List([])))
 
-    init = ee.List([ee.Number(0), ee.List([])])
+    final_collection = ee.ImageCollection.fromImages(selected)
 
-    result = ee.List(sorted_imgs.iterate(accumulate, init))
+    mosaic = final_collection.mosaic().clip(geometry)
 
-    coverage_final = ee.Number(result.get(0))
-    final_imgs = ee.List(result.get(1))
+    # Рассчитаем финальное покрытие для отчёта
+    final_coverage_mask = coverage_mask
+    coverage_area_dict = final_coverage_mask.reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geometry,
+        scale=10,
+        maxPixels=1e13
+    )
+    coverage_area = ee.Number(coverage_area_dict.get('mask'))
+    coverage_ratio = coverage_area.divide(total_area)
 
-    print("✅ Итоговое покрытие:", coverage_final.getInfo())
-    print("✅ Выбранных снимков:", final_imgs.size().getInfo())
-
-    # Преобразуем ee.List обратно в ee.ImageCollection
-    final_collection = ee.ImageCollection(final_imgs)
-    # Применяем маску облаков к финальной коллекции
-    final_collection_masked = final_collection.map(mask_clouds)
-
-    mosaic = final_collection_masked.mosaic().clip(region)
-    mosaic_filled = mosaic.unmask(0)
-
-    return mosaic_filled
+    return mosaic, coverage_ratio
 
 def test_mosaic_region():
     try:
@@ -120,8 +116,9 @@ def test_mosaic_region():
             .filterDate(start, end)
             .filterBounds(geometry)
             .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40))
-            .select(["B2","B3","B4","B8","SCL","TCI_R","TCI_G","TCI_B"])
-            # Не применяем mask_clouds здесь, чтобы считать покрытие маскированных изображений ниже
+            .map(lambda img: img.resample("bicubic").select(["TCI_R", "TCI_G", "TCI_B", "SCL"]))
+            .sort("CLOUDY_PIXEL_PERCENTAGE")
+            .limit(100)  # Чтобы не брать слишком много сразу
         )
 
         count = raw_collection.size().getInfo()
@@ -129,7 +126,11 @@ def test_mosaic_region():
             print("❌ Нет снимков за указанный период")
             return
 
-        mosaic = build_mosaic_with_coverage(raw_collection, geometry, min_coverage=0.95)
+        print(f"📥 Доступно снимков: {count}")
+
+        mosaic, coverage = build_mosaic_with_coverage(raw_collection, geometry, min_coverage=0.95)
+
+        print(f"📸 Выбрано снимков: {mosaic.bandNames().size().getInfo() // 4}")  # Приблизительно по 4 бэнда на снимок
 
         vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
         tile_info = ee.data.getMapId({
@@ -141,6 +142,8 @@ def test_mosaic_region():
 
         print("\n✅ Мозаика построена. XYZ-ссылка:")
         print(xyz)
+
+        print("✅ Итоговое покрытие:", coverage.getInfo())
 
     except Exception as e:
         log_error("test_mosaic_region", e)
