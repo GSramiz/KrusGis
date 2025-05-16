@@ -12,6 +12,7 @@ def initialize_services():
     except Exception as e:
         print("❌ Ошибка инициализации EE:", e)
         raise
+
 # Получение геометрии из пользовательского ассета
 def get_geometry_from_asset(region_name):
     try:
@@ -76,11 +77,11 @@ def build_mosaic_by_coverage(collection, region, min_coverage=0.95):
 
     print("✅ Итоговое покрытие:", coverage_final.getInfo())
     print("✅ Выбранных снимков:", images_final.size().getInfo())
-    
+
     final_collection = ee.ImageCollection.fromImages(images_final)
-mosaic = final_collection.mosaic().resample("bicubic").clip(region)
-mosaic_filled = mosaic.unmask(0)  # <=== исправлено: заполнить прозрачные пиксели 0
-return mosaic_filled
+    mosaic = final_collection.mosaic().resample("bicubic").clip(region)
+    mosaic_filled = mosaic.unmask(0)  # <=== исправлено: заполнить прозрачные пиксели 0
+    return mosaic_filled
 
 # Основная функция
 def main():
