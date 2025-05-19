@@ -3,7 +3,7 @@ import gspread
 import json
 import os
 import traceback
-from oauth2client.service\_account import ServiceAccountCredentials
+from oauth2client.service_account import ServiceAccountCredentials
 
 # Логирование ошибок
 
