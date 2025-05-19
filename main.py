@@ -97,7 +97,7 @@ def update_sheet(sheets_client):
                 geometry = get_geometry_from_asset(region)
 
                 # Сбор коллекции Sentinel-2 (без фильтра CLOUDY_PIXEL_PERCENTAGE)
-                collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
+                collection = ee.ImageCollection("COPERNICUS/S2_HARMONIZED") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
                     .map(mask_clouds)
