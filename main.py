@@ -55,7 +55,10 @@ def get_geometry_from_asset(region_name):
     region = fc.filter(ee.Filter.eq("title", region_name)).first()
     if region is None:
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
-    return region.geometry()
+    geom = region.geometry()
+    if geom is None:
+        raise ValueError(f"Геометрия региона '{region_name}' не найдена")
+    return geom
 
 # Маскирование облаков по SCL
 def mask_clouds(img):
@@ -65,22 +68,18 @@ def mask_clouds(img):
 
 # Подсчет чистой площади снимка
 def get_valid_area(img, geom):
-    # SCL маска: удаляем облака, тени, воду
     scl = img.select("SCL")
     valid_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
-    
-    # Считаем число валидных пикселей
     count = valid_mask.reduceRegion(
         reducer=ee.Reducer.sum(),
         geometry=geom,
         scale=20,
         maxPixels=1e9
     ).get("SCL")
-    
     pixel_area = ee.Number(400)  # 20м x 20м = 400 м²
     return ee.Number(count).multiply(pixel_area)
 
-# Автоматический выбор минимального набора изображений
+# Сбор минимального набора снимков
 def get_minimum_mosaic(collection, geom, threshold=0.95):
     total_area = ee.Number(
         ee.Image.pixelArea().reduceRegion(
@@ -94,32 +93,26 @@ def get_minimum_mosaic(collection, geom, threshold=0.95):
     def iterate_function(img, state):
         img = ee.Image(img)
         state = ee.Dictionary(state)
-
         current_area = ee.Number(state.get("current_area"))
         images = ee.List(state.get("images"))
-
         new_area = get_valid_area(img, geom)
         total = current_area.add(new_area)
         images = images.add(img)
-
         return ee.Algorithms.If(
             total.divide(total_area).lt(threshold),
             ee.Dictionary({"current_area": total, "images": images}),
-            state  # Остановить итерацию, если покрытие достигнуто
+            state
         )
 
     initial_state = ee.Dictionary({"current_area": 0, "images": ee.List([])})
-    final_state = ee.List(collection.toList(collection.size())) \
-        .iterate(iterate_function, initial_state)
-
+    final_state = ee.List(collection.toList(collection.size())).iterate(iterate_function, initial_state)
     result_list = ee.Dictionary(final_state).get("images")
     return ee.ImageCollection(ee.List(result_list))
 
-# Основная логика обновления таблицы
+# Основная функция
 def update_sheet(sheets_client):
     try:
         print("\n📊 Обновление таблицы")
-
         SPREADSHEET_ID = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
         SHEET_NAME = "Sentinel-2 Покрытие"
 
@@ -145,7 +138,6 @@ def update_sheet(sheets_client):
                 print(f"\n🌍 {region} — {start} - {end.format('YYYY-MM-dd').getInfo()}")
                 geometry = get_geometry_from_asset(region)
 
-                # Коллекция изображений
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
@@ -158,24 +150,27 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Оптимизированная мозаика
+                print(f"🧩 Найдено {count} снимков, формируем мозаику...")
+
                 best_subset = get_minimum_mosaic(collection, geometry, threshold=0.95)
+                subset_count = best_subset.size().getInfo()
 
-                # Применить сглаживание перед мозаикой
+                if subset_count == 0:
+                    worksheet.update_cell(row_idx, 3, "Недостаточно покрытие (<95%)")
+                    continue
+
                 best_subset = best_subset.map(lambda img: img.resample("bicubic"))
-
                 mosaic = best_subset.mosaic().clip(geometry)
 
-                # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                tile_info = ee.data.getMapId({
-                    "image": mosaic,
-                    "visParams": vis
-                })
+                visualized = mosaic.visualize(**vis)
+
+                tile_info = ee.data.getMapId({"image": visualized})
                 mapid = tile_info["mapid"].split("/")[-1]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
+                worksheet.update_cell(row_idx, 4, f"{subset_count} снимков")
 
             except Exception as e:
                 log_error(f"Строка {row_idx}", e)
