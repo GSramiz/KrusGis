@@ -3,7 +3,6 @@ import gspread
 import json
 import os
 import traceback
-import calendar
 from oauth2client.service_account import ServiceAccountCredentials
 
 # Логирование ошибок
@@ -42,7 +41,7 @@ def initialize_services():
         log_error("initialize_services", e)
         raise
 
-# Перевод месяца из строки в номер
+# Перевод месяца
 def month_str_to_number(name):
     months = {
         "Январь": "01", "Февраль": "02", "Март": "03", "Апрель": "04",
@@ -51,7 +50,7 @@ def month_str_to_number(name):
     }
     return months.get(name.strip().capitalize(), None)
 
-# Получение геометрии региона
+# Геометрия региона
 def get_geometry_from_asset(region_name):
     fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
     region = fc.filter(ee.Filter.eq("title", region_name)).first()
@@ -65,28 +64,49 @@ def mask_clouds(img):
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(cloud_mask)
 
-# Генерация тайлов по геометрии
-def generate_tiles(geometry, tile_size_deg=0.5):
+# Генерация тайлов 0.25° x 0.25°
+def generate_tiles(geometry, tile_size_deg=0.25):
     bounds = geometry.bounds().coordinates().get(0)
-    coords = ee.List(bounds).map(lambda c: ee.List(c))
-    lon_min = ee.Number(ee.List(coords.get(0)).get(0))
-    lat_min = ee.Number(ee.List(coords.get(0)).get(1))
-    lon_max = ee.Number(ee.List(coords.get(2)).get(0))
-    lat_max = ee.Number(ee.List(coords.get(2)).get(1))
+    coords = ee.List(bounds)
+    lons = coords.map(lambda c: ee.List(c).get(0))
+    lats = coords.map(lambda c: ee.List(c).get(1))
+    xmin = ee.Number(lons.reduce(ee.Reducer.min()))
+    xmax = ee.Number(lons.reduce(ee.Reducer.max()))
+    ymin = ee.Number(lats.reduce(ee.Reducer.min()))
+    ymax = ee.Number(lats.reduce(ee.Reducer.max()))
 
-    lons = ee.List.sequence(lon_min, lon_max, tile_size_deg)
-    lats = ee.List.sequence(lat_min, lat_max, tile_size_deg)
+    tiles = []
+    lat = ymin
+    while lat.lt(ymax):
+        lon = xmin
+        while lon.lt(xmax):
+            tile = ee.Geometry.Rectangle(
+                [lon, lat, lon.add(tile_size_deg), lat.add(tile_size_deg)]
+            ).intersection(geometry, 1)
+            tiles.append(tile)
+            lon = lon.add(tile_size_deg)
+        lat = lat.add(tile_size_deg)
 
-    def create_tile(lat):
-        def create_lon_tile(lon):
-            return ee.Feature(ee.Geometry.Rectangle([lon, lat, ee.Number(lon).add(tile_size_deg), ee.Number(lat).add(tile_size_deg)]))
-        return lons.map(create_lon_tile)
+    return ee.List(tiles)
 
-    tiles_nested = lats.map(create_tile)
-    tiles_flat = tiles_nested.flatten()
-    return ee.FeatureCollection(tiles_flat).filterBounds(geometry)
+# Сборка мозаики по тайлам
+def build_mosaic_from_tiles(geometry, start, end):
+    tiles = generate_tiles(geometry)
 
-# Основная логика обновления таблицы
+    def process_tile(tile):
+        tile_geom = ee.Geometry(tile)
+        collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
+            .filterDate(start, end) \
+            .filterBounds(tile_geom) \
+            .map(mask_clouds)
+
+        return collection.mosaic().clip(tile_geom)
+
+    mosaics = tiles.map(process_tile)
+    return ee.ImageCollection(mosaics).mosaic().clip(geometry)
+
+# Основная логика
+
 def update_sheet(sheets_client):
     try:
         print("\n📊 Обновление таблицы")
@@ -111,33 +131,24 @@ def update_sheet(sheets_client):
                 month_num = month_str_to_number(parts[0])
                 year = parts[1]
                 start = f"{year}-{month_num}-01"
-                days = calendar.monthrange(int(year), int(month_num))[1]
-                end_str = f"{year}-{month_num}-{days:02d}"
+                end = f"{year}-{month_num}-28"  # Условный конец месяца
 
-                print(f"\n🌍 {region} — {start} - {end_str}")
+                print(f"\n🌍 {region} — {start} - {end}")
 
                 geometry = get_geometry_from_asset(region)
-                tiles = generate_tiles(geometry)
+                collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
+                    .filterDate(start, end) \
+                    .filterBounds(geometry)
 
-                def process_tile(tile):
-                    geom = tile.geometry()
-                    img = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
-                        .filterDate(start, end_str) \
-                        .filterBounds(geom) \
-                        .map(mask_clouds) \
-                        .map(lambda img: img.resample("bicubic")) \
-                        .mosaic().clip(geom)
-                    return img
+                if collection.size().getInfo() == 0:
+                    worksheet.update_cell(row_idx, 3, "Нет снимков")
+                    continue
 
-                tile_images = tiles.toList(tiles.size()).map(lambda f: process_tile(ee.Feature(f)))
-                mosaic = ee.ImageCollection(tile_images).mosaic().clip(geometry)
-
-                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
-                tile_info = ee.data.getMapId({"image": visualized})
-                raw_mapid = tile_info["mapid"]
-                clean_mapid = raw_mapid.split("/")[-1]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
+                mosaic = build_mosaic_from_tiles(geometry, start, end)
+                rgb = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).divide(255).multiply(255).uint8()
+                tile_info = ee.data.getMapId({"image": rgb.clip(geometry)})
+                mapid = tile_info["mapid"]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
 
