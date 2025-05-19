@@ -90,16 +90,16 @@ def update_sheet(sheets_client):
                 year = parts[1]
                 start = f"{year}-{month_num}-01"
                 end = ee.Date(start).advance(1, "month")
+                end_str = end.format("YYYY-MM-dd").getInfo()
 
-                print(f"\n🌍 {region} — {start} - {end.format('YYYY-MM-dd').getInfo()}")
+                print(f"\n🌍 {region} — {start} - {end_str}")
 
                 geometry = get_geometry_from_asset(region)
 
-          # Сбор коллекции Sentinel-2
+                # Сбор коллекции Sentinel-2 (без фильтра CLOUDY_PIXEL_PERCENTAGE)
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
-                    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30)) \
                     .map(mask_clouds)
 
                 # Проверка наличия снимков
@@ -114,11 +114,11 @@ def update_sheet(sheets_client):
 
                 # Визуализация (ускоренная)
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                visualized = mosaic.visualize(**vis)
-
+                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
                 tile_info = ee.data.getMapId({"image": visualized})
-                mapid = tile_info["mapid"]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
+                raw_mapid = tile_info["mapid"]
+                clean_mapid = raw_mapid.split("/")[-1]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
 
