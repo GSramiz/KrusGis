@@ -58,11 +58,11 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-# Маскирование облаков по SCL с сохранением свойств
+# Маскирование облаков по SCL
 def mask_clouds(img):
     scl = img.select("SCL")
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
-    return img.updateMask(cloud_mask).copyProperties(img, img.propertyNames())
+    return img.updateMask(cloud_mask)
 
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
@@ -96,12 +96,11 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # Сбор коллекции Sentinel-2 с сортировкой по облачности
+                # Сбор коллекции Sentinel-2 (без фильтра CLOUDY_PIXEL_PERCENTAGE)
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
-                    .map(mask_clouds) \
-                    .sort("CLOUDY_PIXEL_PERCENTAGE")
+                    .map(mask_clouds)
 
                 # Проверка наличия снимков
                 count = collection.size().getInfo()
@@ -111,14 +110,12 @@ def update_sheet(sheets_client):
 
                 # Сглаживание и мозаика
                 collection = collection.map(lambda img: img.resample("bicubic"))
-                mosaic = collection.mosaic()
+                mosaic = collection.mosaic().clip(geometry)
 
-                # Визуализация (ускоренная) с максимальным зумом
+                # Визуализация (ускоренная)
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]) \
-                    .visualize(**vis) \
-                    .reproject(crs="EPSG:4326", scale=15)
-
+                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
+                .reproject(crs="EPSG:4326", scale=15)
                 tile_info = ee.data.getMapId({"image": visualized})
                 raw_mapid = tile_info["mapid"]
                 clean_mapid = raw_mapid.split("/")[-1]
