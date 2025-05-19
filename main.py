@@ -58,9 +58,11 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-# Маскирование облаков по SCL (для s2l2a-cogs)
-def mask_clouds_s2l2a(img):
-    scl = img.select("SCL")
+# Маскирование облаков (если есть SCL)
+def mask_clouds(img):
+    band_names = img.bandNames()
+    scl_present = band_names.contains("SCL")
+    scl = ee.Image(ee.Algorithms.If(scl_present, img.select("SCL"), ee.Image(0)))
     mask = scl.neq(3).And(scl.neq(7)).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(mask)
 
@@ -96,25 +98,25 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # Используем s2l2a-cogs (без CLOUDY_PIXEL_PERCENTAGE)
-                collection = ee.ImageCollection("projects/sentinel-s2-l2a-cogs/assets/s2_l2a_cogs")
-                collection = collection.filterDate(start, end) \
+                # Подключаем коллекцию COGs
+                collection = ee.ImageCollection("projects/sat-io/open-datasets/S2L2A-Cogs") \
+                    .filterDate(start, end) \
                     .filterBounds(geometry) \
-                    .map(mask_clouds_s2l2a)
+                    .map(mask_clouds) \
+                    .map(lambda img: img.resample("bicubic"))
 
-                # Проверка наличия снимков
                 count = collection.size().getInfo()
                 if count == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Сглаживание и мозаика
-                collection = collection.map(lambda img: img.resample("bicubic"))
+                # Мозаика
                 mosaic = collection.mosaic().clip(geometry)
 
-                # Визуализация по TCI
-                vis = {"bands": ["visual_red", "visual_green", "visual_blue"], "min": 0, "max": 3000}
-                visualized = mosaic.select(["visual_red", "visual_green", "visual_blue"]).visualize(**vis)
+                # Визуализация (через стандартные каналы B04, B03, B02)
+                vis = {"bands": ["B04", "B03", "B02"], "min": 0, "max": 3000}
+                visualized = mosaic.select(["B04", "B03", "B02"]).visualize(**vis)
+
                 tile_info = ee.data.getMapId({"image": visualized})
                 raw_mapid = tile_info["mapid"]
                 clean_mapid = raw_mapid.split("/")[-1]
