@@ -96,11 +96,11 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # Сбор коллекции Sentinel-2 (без фильтра CLOUDY_PIXEL_PERCENTAGE)
+                # Сбор коллекции Sentinel-2 (маскирование и выбор только TCI)
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
-                    .map(mask_clouds)
+                    .map(lambda img: mask_clouds(img).select(["TCI_R", "TCI_G", "TCI_B"]))
 
                 # Проверка наличия снимков
                 count = collection.size().getInfo()
@@ -114,7 +114,7 @@ def update_sheet(sheets_client):
 
                 # Визуализация (ускоренная)
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
+                visualized = mosaic.visualize(**vis)
                 tile_info = ee.data.getMapId({"image": visualized})
                 raw_mapid = tile_info["mapid"]
                 clean_mapid = raw_mapid.split("/")[-1]
