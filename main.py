@@ -114,11 +114,7 @@ def update_sheet(sheets_client):
 
                 # Визуализация (ускоренная)
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                visualized = (
-                    mosaic.select(["TCI_R", "TCI_G", "TCI_B"])
-                    .visualize(**vis)
-                    .reproject(crs="EPSG:4326", scale=15)
-                )
+                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
                 tile_info = ee.data.getMapId({"image": visualized})
                 raw_mapid = tile_info["mapid"]
                 clean_mapid = raw_mapid.split("/")[-1]
