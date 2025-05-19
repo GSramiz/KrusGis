@@ -3,20 +3,21 @@ import gspread
 import json
 import os
 import traceback
+import calendar
 from oauth2client.service_account import ServiceAccountCredentials
 
 # Логирование ошибок
 def log_error(context, error):
-    print(f"\n❌ ОШИБКА в {context}:")
-    print(f"Тип: {type(error).__name__}")
-    print(f"Сообщение: {str(error)}")
+    print(f"\n\u274c \u041e\u0428\u0418\u0411\u041a\u0410 \u0432 {context}:")
+    print(f"\u0422\u0438\u043f: {type(error).__name__}")
+    print(f"\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435: {str(error)}")
     traceback.print_exc()
     print("=" * 50)
 
 # Инициализация Earth Engine и Google Sheets
 def initialize_services():
     try:
-        print("\n🔧 Инициализация сервисов...")
+        print("\n\ud83d\udd27 \u0418\u043d\u0438\u0446\u0438\u0430\u043b\u0438\u0437\u0430\u0446\u0438\u044f \u0441\u0435\u0440\u0432\u0438\u0441\u043e\u0432...")
 
         service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
 
@@ -25,7 +26,7 @@ def initialize_services():
             key_data=json.dumps(service_account_info)
         )
         ee.Initialize(credentials)
-        print("✅ Earth Engine: инициализирован")
+        print("\u2705 Earth Engine: \u0438\u043d\u0438\u0446\u0438\u0430\u043b\u0438\u0437\u0438\u0440\u043e\u0432\u0430\u043d")
 
         scope = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -34,14 +35,14 @@ def initialize_services():
         sheets_client = gspread.authorize(
             ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
         )
-        print("✅ Google Sheets: авторизация прошла успешно")
+        print("\u2705 Google Sheets: \u0430\u0432\u0442\u043e\u0440\u0438\u0437\u0430\u0446\u0438\u044f \u043f\u0440\u043e\u0448\u043b\u0430 \u0443\u0441\u043f\u0435\u0448\u043d\u043e")
         return sheets_client
 
     except Exception as e:
         log_error("initialize_services", e)
         raise
 
-# Перевод месяца
+# Перевод месяца из строки в номер
 def month_str_to_number(name):
     months = {
         "Январь": "01", "Февраль": "02", "Март": "03", "Апрель": "04",
@@ -50,7 +51,7 @@ def month_str_to_number(name):
     }
     return months.get(name.strip().capitalize(), None)
 
-# Геометрия региона
+# Получение геометрии региона
 def get_geometry_from_asset(region_name):
     fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
     region = fc.filter(ee.Filter.eq("title", region_name)).first()
@@ -64,52 +65,10 @@ def mask_clouds(img):
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(cloud_mask)
 
-# Генерация тайлов 0.25° x 0.25°
-def generate_tiles(geometry, tile_size_deg=0.25):
-    bounds = geometry.bounds().coordinates().get(0)
-    coords = ee.List(bounds)
-    lons = coords.map(lambda c: ee.List(c).get(0))
-    lats = coords.map(lambda c: ee.List(c).get(1))
-    xmin = ee.Number(lons.reduce(ee.Reducer.min()))
-    xmax = ee.Number(lons.reduce(ee.Reducer.max()))
-    ymin = ee.Number(lats.reduce(ee.Reducer.min()))
-    ymax = ee.Number(lats.reduce(ee.Reducer.max()))
-
-    tiles = []
-    lat = ymin
-    while lat.lt(ymax):
-        lon = xmin
-        while lon.lt(xmax):
-            tile = ee.Geometry.Rectangle(
-                [lon, lat, lon.add(tile_size_deg), lat.add(tile_size_deg)]
-            ).intersection(geometry, 1)
-            tiles.append(tile)
-            lon = lon.add(tile_size_deg)
-        lat = lat.add(tile_size_deg)
-
-    return ee.List(tiles)
-
-# Сборка мозаики по тайлам
-def build_mosaic_from_tiles(geometry, start, end):
-    tiles = generate_tiles(geometry)
-
-    def process_tile(tile):
-        tile_geom = ee.Geometry(tile)
-        collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
-            .filterDate(start, end) \
-            .filterBounds(tile_geom) \
-            .map(mask_clouds)
-
-        return collection.mosaic().clip(tile_geom)
-
-    mosaics = tiles.map(process_tile)
-    return ee.ImageCollection(mosaics).mosaic().clip(geometry)
-
-# Основная логика
-
+# Основная логика обновления таблицы
 def update_sheet(sheets_client):
     try:
-        print("\n📊 Обновление таблицы")
+        print("\n\ud83d\udcca \u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u0442\u0430\u0431\u043b\u0438\u0446\u044b")
 
         SPREADSHEET_ID = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
         SHEET_NAME = "Sentinel-2 Покрытие"
@@ -131,24 +90,29 @@ def update_sheet(sheets_client):
                 month_num = month_str_to_number(parts[0])
                 year = parts[1]
                 start = f"{year}-{month_num}-01"
-                end = f"{year}-{month_num}-28"  # Условный конец месяца
+                days = calendar.monthrange(int(year), int(month_num))[1]
+                end_str = f"{year}-{month_num}-{days:02d}"
 
-                print(f"\n🌍 {region} — {start} - {end}")
+                print(f"\n\ud83c\udf0d {region} — {start} - {end_str}")
 
                 geometry = get_geometry_from_asset(region)
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
-                    .filterDate(start, end) \
-                    .filterBounds(geometry)
+                    .filterDate(start, end_str) \
+                    .filterBounds(geometry) \
+                    .map(mask_clouds)
 
-                if collection.size().getInfo() == 0:
+                size = collection.size().getInfo()
+                if size == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                mosaic = build_mosaic_from_tiles(geometry, start, end)
-                rgb = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).divide(255).multiply(255).uint8()
-                tile_info = ee.data.getMapId({"image": rgb.clip(geometry)})
-                mapid = tile_info["mapid"]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
+                mosaic = collection.mosaic().clip(geometry)
+                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
+                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
+                tile_info = ee.data.getMapId({"image": visualized})
+                raw_mapid = tile_info["mapid"]
+                clean_mapid = raw_mapid.split("/")[-1]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
 
@@ -165,7 +129,7 @@ if __name__ == "__main__":
     try:
         client = initialize_services()
         update_sheet(client)
-        print("\n✅ Скрипт успешно завершен")
+        print("\n\u2705 \u0421\u043a\u0440\u0438\u043f\u0442 \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d")
     except Exception as e:
         log_error("main", e)
         exit(1)
