@@ -95,26 +95,27 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # Коллекция изображений
+          # Сбор коллекции Sentinel-2
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
-                    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)) \
-                    .sort("CLOUDY_PIXEL_PERCENTAGE") \
+                    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30)) \
                     .map(mask_clouds)
 
                 # Проверка наличия снимков
-                if collection.size().getInfo() == 0:
+                count = collection.size().getInfo()
+                if count == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Мозаика и визуализация с интерполяцией
-collection = collection.map(lambda img: img.resample("bicubic"))
-mosaic = collection.mosaic().clip(geometry)
-vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-visualized = mosaic.visualize(**vis)
+                # Сглаживание и мозаика
+                collection = collection.map(lambda img: img.resample("bicubic"))
+                mosaic = collection.mosaic().clip(geometry)
 
-                # Получение XYZ-ссылки
+                # Визуализация (ускоренная)
+                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
+                visualized = mosaic.visualize(**vis)
+
                 tile_info = ee.data.getMapId({"image": visualized})
                 mapid = tile_info["mapid"]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
