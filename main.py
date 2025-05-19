@@ -3,6 +3,7 @@ import gspread
 import json
 import os
 import traceback
+import calendar
 from oauth2client.service_account import ServiceAccountCredentials
 
 # Логирование ошибок
@@ -58,13 +59,32 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-# Маскирование облаков (если есть SCL)
+# Маскирование облаков по SCL
 def mask_clouds(img):
-    band_names = img.bandNames()
-    scl_present = band_names.contains("SCL")
-    scl = ee.Image(ee.Algorithms.If(scl_present, img.select("SCL"), ee.Image(0)))
-    mask = scl.neq(3).And(scl.neq(7)).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
-    return img.updateMask(mask)
+    scl = img.select("SCL")
+    cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
+    return img.updateMask(cloud_mask)
+
+# Генерация тайлов по геометрии
+def generate_tiles(geometry, tile_size_deg=0.5):
+    bounds = geometry.bounds().coordinates().get(0)
+    coords = ee.List(bounds).map(lambda c: ee.List(c))
+    lon_min = ee.Number(ee.List(coords.get(0)).get(0))
+    lat_min = ee.Number(ee.List(coords.get(0)).get(1))
+    lon_max = ee.Number(ee.List(coords.get(2)).get(0))
+    lat_max = ee.Number(ee.List(coords.get(2)).get(1))
+
+    lons = ee.List.sequence(lon_min, lon_max, tile_size_deg)
+    lats = ee.List.sequence(lat_min, lat_max, tile_size_deg)
+
+    def create_tile(lat):
+        def create_lon_tile(lon):
+            return ee.Feature(ee.Geometry.Rectangle([lon, lat, ee.Number(lon).add(tile_size_deg), ee.Number(lat).add(tile_size_deg)]))
+        return lons.map(create_lon_tile)
+
+    tiles_nested = lats.map(create_tile)
+    tiles_flat = tiles_nested.flatten()
+    return ee.FeatureCollection(tiles_flat).filterBounds(geometry)
 
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
@@ -91,32 +111,29 @@ def update_sheet(sheets_client):
                 month_num = month_str_to_number(parts[0])
                 year = parts[1]
                 start = f"{year}-{month_num}-01"
-                end = ee.Date(start).advance(1, "month")
-                end_str = end.format("YYYY-MM-dd").getInfo()
+                days = calendar.monthrange(int(year), int(month_num))[1]
+                end_str = f"{year}-{month_num}-{days:02d}"
 
                 print(f"\n🌍 {region} — {start} - {end_str}")
 
                 geometry = get_geometry_from_asset(region)
+                tiles = generate_tiles(geometry)
 
-                # Подключаем коллекцию COGs
-                collection = ee.ImageCollection("projects/sat-io/open-datasets/S2L2A-Cogs") \
-                    .filterDate(start, end) \
-                    .filterBounds(geometry) \
-                    .map(mask_clouds) \
-                    .map(lambda img: img.resample("bicubic"))
+                def process_tile(tile):
+                    geom = tile.geometry()
+                    img = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
+                        .filterDate(start, end_str) \
+                        .filterBounds(geom) \
+                        .map(mask_clouds) \
+                        .map(lambda img: img.resample("bicubic")) \
+                        .mosaic().clip(geom)
+                    return img
 
-                count = collection.size().getInfo()
-                if count == 0:
-                    worksheet.update_cell(row_idx, 3, "Нет снимков")
-                    continue
+                tile_images = tiles.toList(tiles.size()).map(lambda f: process_tile(ee.Feature(f)))
+                mosaic = ee.ImageCollection(tile_images).mosaic().clip(geometry)
 
-                # Мозаика
-                mosaic = collection.mosaic().clip(geometry)
-
-                # Визуализация (через стандартные каналы B04, B03, B02)
-                vis = {"bands": ["B04", "B03", "B02"], "min": 0, "max": 3000}
-                visualized = mosaic.select(["B04", "B03", "B02"]).visualize(**vis)
-
+                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
+                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
                 tile_info = ee.data.getMapId({"image": visualized})
                 raw_mapid = tile_info["mapid"]
                 clean_mapid = raw_mapid.split("/")[-1]
