@@ -58,11 +58,11 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-# Маскирование облаков по SCL
+# Маскирование облаков по SCL с сохранением свойств
 def mask_clouds(img):
     scl = img.select("SCL")
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
-    return img.updateMask(cloud_mask)
+    return img.updateMask(cloud_mask).copyProperties(img, img.propertyNames())
 
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
@@ -97,12 +97,13 @@ def update_sheet(sheets_client):
                 geometry = get_geometry_from_asset(region)
 
                 # Сбор коллекции Sentinel-2 с сортировкой по облачности
-collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
-    .filterDate(start, end) \
-    .filterBounds(geometry) \
-    .map(mask_clouds) \
-    .sort("CLOUDY_PIXEL_PERCENTAGE")
+                collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
+                    .filterDate(start, end) \
+                    .filterBounds(geometry) \
+                    .map(mask_clouds) \
+                    .sort("CLOUDY_PIXEL_PERCENTAGE")
 
+                # Проверка наличия снимков
                 count = collection.size().getInfo()
                 if count == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
@@ -110,17 +111,18 @@ collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
 
                 # Сглаживание и мозаика
                 collection = collection.map(lambda img: img.resample("bicubic"))
-                mosaic = collection.mosaic().clip(geometry)
+                mosaic = collection.mosaic()
 
-                # Визуализация с фиксированным разрешением
+                # Визуализация (ускоренная) с максимальным зумом
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
                 visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]) \
                     .visualize(**vis) \
                     .reproject(crs="EPSG:4326", scale=15)
 
                 tile_info = ee.data.getMapId({"image": visualized})
-                mapid = tile_info["mapid"]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
+                raw_mapid = tile_info["mapid"]
+                clean_mapid = raw_mapid.split("/")[-1]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
 
