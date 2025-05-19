@@ -86,22 +86,29 @@ def get_minimum_mosaic(collection, geom, threshold=0.95):
         ).get("area")
     )
 
-    def iterate_images(img_list, mosaic_list, current_area):
-        img = ee.Image(img_list.get(0))
-        new_area = get_valid_area(img, geom)
-        new_total = current_area.add(new_area)
-        new_list = mosaic_list.add(img)
+    def iterate_function(img, state):
+        img = ee.Image(img)
+        state = ee.Dictionary(state)
 
-        condition = new_total.divide(total_area).lt(threshold)
+        current_area = ee.Number(state.get("current_area"))
+        images = ee.List(state.get("images"))
+
+        new_area = get_valid_area(img, geom)
+        total = current_area.add(new_area)
+        images = images.add(img)
+
         return ee.Algorithms.If(
-            condition.And(img_list.size().gt(1)),
-            iterate_images(img_list.slice(1), new_list, new_total),
-            new_list
+            total.divide(total_area).lt(threshold),
+            ee.Dictionary({"current_area": total, "images": images}),
+            state  # Остановить итерацию, если покрытие достигнуто
         )
 
-    sorted_images = collection.toList(collection.size())
-    result = ee.List(iterate_images(sorted_images, ee.List([]), ee.Number(0)))
-    return ee.ImageCollection(result)
+    initial_state = ee.Dictionary({"current_area": 0, "images": ee.List([])})
+    final_state = ee.List(collection.toList(collection.size())) \
+        .iterate(iterate_function, initial_state)
+
+    result_list = ee.Dictionary(final_state).get("images")
+    return ee.ImageCollection(ee.List(result_list))
 
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
