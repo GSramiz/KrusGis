@@ -112,16 +112,20 @@ def update_sheet(sheets_client):
                 collection = collection.map(lambda img: img.resample("bicubic"))
                 mosaic = collection.mosaic().clip(geometry)
 
-                # Визуализация (ускоренная)
-                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
-                .reproject(crs="EPSG:4326", scale=15)
-                tile_info = ee.data.getMapId({"image": visualized})
-                raw_mapid = tile_info["mapid"]
-                clean_mapid = raw_mapid.split("/")[-1]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
+            # Визуализация (ускоренная)
+vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
+visualized = (
+    mosaic.select(["TCI_R", "TCI_G", "TCI_B"])
+    .visualize(**vis)
+    .reproject(crs="EPSG:4326", scale=15)
+)
+tile_info = ee.data.getMapId({"image": visualized})
+raw_mapid = tile_info["mapid"]
+clean_mapid = raw_mapid.split("/")[-1]
+xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
-                worksheet.update_cell(row_idx, 3, xyz)
+worksheet.update_cell(row_idx, 3, xyz)
+
 
             except Exception as e:
                 log_error(f"Строка {row_idx}", e)
