@@ -96,11 +96,21 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # Сбор коллекции Sentinel-2 (без фильтра CLOUDY_PIXEL_PERCENTAGE)
+                # Ручное создание RGB, растяжка и сглаживание
+def prepare_rgb(img):
+    rgb = img.select(["B4", "B3", "B2"]) \
+             .clamp(0, 3000) \
+             .divide(3000) \
+             .multiply(255) \
+             .uint8()
+    return rgb.resample("bilinear")
+                
+                # Сбор коллекции
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
-                    .map(mask_clouds)
+                    .map(mask_clouds) \
+                    .map(prepare_rgb)
 
                 # Проверка наличия снимков
                 count = collection.size().getInfo()
@@ -108,13 +118,12 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Сглаживание и мозаика
-                collection = collection.map(lambda img: img.resample("bicubic"))
+                # Мозаика и визуализация
                 mosaic = collection.mosaic().clip(geometry)
+                vis = {"bands": ["B4", "B3", "B2"], "min": 0, "max": 255}
+                visualized = mosaic.visualize(**vis)
 
-                # Визуализация (ускоренная)
-                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
+                # Генерация XYZ-ссылки
                 tile_info = ee.data.getMapId({"image": visualized})
                 raw_mapid = tile_info["mapid"]
                 clean_mapid = raw_mapid.split("/")[-1]
