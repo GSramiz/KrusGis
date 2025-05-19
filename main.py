@@ -58,11 +58,17 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-# Маскирование облаков по SCL
-def mask_clouds(img):
-    scl = img.select("SCL")
-    cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
-    return img.updateMask(cloud_mask)
+# Маска облаков с использованием s2cloudless
+def mask_clouds_s2cloudless(img):
+    cloud_prob_coll = ee.ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY") \
+        .filterBounds(img.geometry()) \
+        .filterDate(img.date(), img.date().advance(1, 'day'))
+
+    cloud_prob = ee.Image(cloud_prob_coll.first())
+    # Если облачная маска не найдена — пропустить
+    mask = ee.Image(ee.Algorithms.If(cloud_prob, cloud_prob.lt(30), img.mask().Not()))
+    
+    return img.updateMask(mask)
 
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
@@ -96,11 +102,11 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # Сбор коллекции Sentinel-2 (без фильтра CLOUDY_PIXEL_PERCENTAGE)
-                collection = ee.ImageCollection("COPERNICUS/S2_HARMONIZED") \
+                # Сбор коллекции Sentinel-2
+                collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end) \
                     .filterBounds(geometry) \
-                    .map(mask_clouds)
+                    .map(mask_clouds_s2cloudless)
 
                 # Проверка наличия снимков
                 count = collection.size().getInfo()
@@ -112,7 +118,7 @@ def update_sheet(sheets_client):
                 collection = collection.map(lambda img: img.resample("bicubic"))
                 mosaic = collection.mosaic().clip(geometry)
 
-                # Визуализация (ускоренная)
+                # Визуализация
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
                 visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
                 tile_info = ee.data.getMapId({"image": visualized})
@@ -138,4 +144,4 @@ if __name__ == "__main__":
         print("\n✅ Скрипт успешно завершен")
     except Exception as e:
         log_error("main", e)
-        exit(1) 
+        exit(1)
