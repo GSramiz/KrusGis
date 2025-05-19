@@ -65,7 +65,19 @@ def mask_clouds(img):
 
 # Подсчет чистой площади снимка
 def get_valid_area(img, geom):
-    return ee.Number(1)  # Просто считает 1 единицу за каждый снимок
+    # Выбираем SCL маску для определения "чистых" пикселей
+    scl = img.select("SCL")
+    valid_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))  # без облаков, теней и воды
+
+    # Площадь чистых пикселей
+    valid_pixels = ee.Image.pixelArea().updateMask(valid_mask)
+    stats = valid_pixels.reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geom,
+        scale=20,
+        maxPixels=1e9
+    )
+    return ee.Number(stats.get("area"))
 
 # Автоматический выбор минимального набора изображений
 def get_minimum_mosaic(collection, geom, threshold=0.95):
