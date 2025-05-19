@@ -65,15 +65,7 @@ def mask_clouds(img):
 
 # Подсчет чистой площади снимка
 def get_valid_area(img, geom):
-    masked = img.select(0).mask()
-    area_img = masked.multiply(ee.Image.pixelArea())
-    stats = area_img.reduceRegion(
-        reducer=ee.Reducer.sum(),
-        geometry=geom,
-        scale=20,
-        maxPixels=2e9  # Увеличено для крупных регионов
-    )
-    return ee.Number(stats.get(masked.bandNames().get(0)))
+    return ee.Number(1)  # Просто считает 1 единицу за каждый снимок
 
 # Автоматический выбор минимального набора изображений
 def get_minimum_mosaic(collection, geom, threshold=0.95):
