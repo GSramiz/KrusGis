@@ -91,27 +91,33 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                # 🔸 Расчёт лимита по площади с запасом 30%
-                area_km2 = geometry.area().divide(1e6)
-                max_images = area_km2.divide(10000).multiply(1.3).ceil().int()
-                max_images_int = max_images.getInfo()
-
-                print(f"📐 Площадь: {area_km2.getInfo():,.0f} км² → Лимит снимков: {max_images_int}")
-
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end_str) \
                     .filterBounds(geometry) \
-                    .map(mask_clouds) \
-                    .limit(max_images_int)
+                    .map(mask_clouds)
 
                 size = collection.size().getInfo()
                 if size == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
+                # Построим предварительную мозаику
                 mosaic = collection.mosaic()
+
+                # Исключим снимки, не внесшие вклад
+                def contributed(img):
+                    mask = img.mask().reduce(ee.Reducer.anyNonZero())
+                    mosaic_mask = mosaic.mask().reduce(ee.Reducer.anyNonZero())
+                    overlap = mask.And(mosaic_mask)
+                    return img.updateMask(overlap)
+
+                filtered_collection = collection.map(contributed).filter(ee.Filter.maskNotNone())
+
+                # Перестроим мозаику только из участвовавших снимков
+                filtered_mosaic = filtered_collection.mosaic()
+
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
+                visualized = filtered_mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
 
                 tile_info = ee.data.getMapId({"image": visualized})
                 clean_mapid = tile_info["mapid"].split("/")[-1]
