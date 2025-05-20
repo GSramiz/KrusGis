@@ -101,10 +101,10 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Построим предварительную мозаику
+                # Предварительная мозаика
                 mosaic = collection.mosaic()
 
-                # Исключим снимки, не внесшие вклад
+                # Исключаем снимки, не вносящие вклад
                 def contributed(img):
                     mask = img.mask().reduce(ee.Reducer.anyNonZero())
                     mosaic_mask = mosaic.mask().reduce(ee.Reducer.anyNonZero())
@@ -118,7 +118,7 @@ def update_sheet(sheets_client):
                 filtered_collection = collection.map(contributed).map(has_mask) \
                     .filter(ee.Filter.eq("has_mask", 1))
 
-                # Перестроим мозаику только из снимков, реально попавших в результат
+                # Финальная мозаика
                 filtered_mosaic = filtered_collection.mosaic()
 
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
@@ -137,3 +137,12 @@ def update_sheet(sheets_client):
     except Exception as e:
         log_error("update_sheet", e)
         raise
+
+if __name__ == "__main__":
+    try:
+        client = initialize_services()
+        update_sheet(client)
+        print("\n✅ Скрипт успешно завершен")
+    except Exception as e:
+        log_error("main", e)
+        exit(1)
