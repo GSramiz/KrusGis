@@ -55,72 +55,11 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-# ✅ Маска облаков
 def mask_clouds(img):
     scl = img.select("SCL")
-    cloud_mask = scl.neq(3).And(scl.neq(7)).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10)).And(scl.neq(11))
+    cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(cloud_mask).resample("bilinear")
 
-# ✅ Построение мозаики с порогом покрытия
-def build_mosaic(geometry, start_date, end_date, max_coverage_percent=95):
-    region_area = geometry.area()
-
-    collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
-        .filterDate(start_date, end_date) \
-        .filterBounds(geometry) \
-        .map(mask_clouds) \
-        .sort("CLOUDY_PIXEL_PERCENTAGE")
-
-    def add_mask(image):
-        return image.set("mask_area", image.select("B8").mask().reduceRegion(
-            reducer=ee.Reducer.sum(),
-            geometry=geometry,
-            scale=20,
-            maxPixels=1e8
-        ).get("B8"))
-
-    images_with_mask = collection.map(add_mask)
-    image_list = images_with_mask.toList(images_with_mask.size())
-
-    coverage = ee.Image(0)
-    selected = []
-    i = 0
-    while True:
-        try:
-            img = ee.Image(image_list.get(i))
-        except:
-            break
-        mask = img.select("B8").mask()
-        coverage = coverage.unmask(0).Or(mask)
-
-        current_area = coverage.reduceRegion(
-            reducer=ee.Reducer.sum(),
-            geometry=geometry,
-            scale=20,
-            maxPixels=1e8
-        ).getNumber("B8")
-
-        percent = current_area.multiply(400).divide(region_area).multiply(100)
-        selected.append(img)
-
-        if percent.gte(max_coverage_percent):
-            break
-        i += 1
-        if i >= image_list.size().getInfo():
-            break
-
-    if not selected:
-        return None
-
-    mosaic = ee.ImageCollection.fromImages(selected).mosaic()
-    vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 3000}
-    visualized = mosaic.visualize(**vis)
-
-    tile_info = ee.data.getMapId({"image": visualized})
-    clean_mapid = tile_info["mapid"]
-    return f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
-
-# ✅ Обновление таблицы
 def update_sheet(sheets_client):
     try:
         print("\n📊 Обновление таблицы")
@@ -146,15 +85,85 @@ def update_sheet(sheets_client):
                 year = parts[1]
                 start = f"{year}-{month_num}-01"
                 days = calendar.monthrange(int(year), int(month_num))[1]
-                end = f"{year}-{month_num}-{days:02d}"
+                end_str = f"{year}-{month_num}-{days:02d}"
 
-                print(f"\n🌍 {region} — {start} - {end}")
+                print(f"\n🌍 {region} — {start} - {end_str}")
+
                 geometry = get_geometry_from_asset(region)
 
-                xyz = build_mosaic(geometry, start, end)
-                if not xyz:
+                MAX_IMAGES = 30  # Лимит по числу снимков, подбирается по региону
+MIN_COVERAGE = 0.95  # Требуемая доля покрытия (95%)
+
+collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
+    .filterDate(start, end_str) \
+    .filterBounds(geometry) \
+    .map(mask_clouds) \
+    .sort("CLOUDY_PIXEL_PERCENTAGE")
+
+# Считаем нужное кол-во снимков на покрытие
+def calc_coverage(images):
+    region_area = geometry.area()
+    def compute_area(img):
+        return img.set('valid_area', img.select('B8').mask().reduceRegion(
+            reducer=ee.Reducer.sum(),
+            geometry=geometry,
+            scale=120,
+            maxPixels=1e8
+        ).get('B8'))
+
+    with_area = images.map(compute_area)
+    image_list = with_area.toList(MAX_IMAGES)
+
+    total = ee.Number(0)
+    selected = ee.List([])
+
+    def condition(i, state):
+        return ee.Number(i).lt(MAX_IMAGES).And(
+            ee.Number(state[0]).divide(region_area).lt(MIN_COVERAGE)
+        )
+
+    def iterate(i, state):
+        img = ee.Image(image_list.get(i))
+        area = ee.Number(img.get('valid_area'))
+        new_total = ee.Number(state[0]).add(area)
+        new_list = state[1].add(img)
+        return ee.List([new_total, new_list])
+
+    i = ee.Number(0)
+    state = ee.List([total, selected])
+
+    def loop(i, state):
+        return ee.Algorithms.If(
+            condition(i, state),
+            loop(i.add(1), iterate(i, state)),
+            state
+        )
+
+    final = loop(i, state)
+    return ee.List(final.get(1))
+
+selected_images = calc_coverage(collection)
+
+# Если пусто — пропускаем
+if selected_images.size().eq(0).getInfo():
+    worksheet.update_cell(row_idx, 3, "Нет снимков")
+    continue
+
+collection = ee.ImageCollection.fromImages(selected_images)
+
+
+                size = collection.size().getInfo()
+                if size == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
+
+                mosaic = collection.mosaic()
+                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
+                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
+
+                tile_info = ee.data.getMapId({"image": visualized})
+                clean_mapid = tile_info["mapid"].split("/")[-1]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
 
