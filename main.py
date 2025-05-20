@@ -8,7 +8,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # Логирование ошибок
 def log_error(context, error):
-    print(f"\n[ERROR] Ошибка в {context}:")
+    print(f"\nОШИБКА в {context}:")
     print(f"Тип: {type(error).__name__}")
     print(f"Сообщение: {str(error)}")
     traceback.print_exc()
@@ -17,7 +17,7 @@ def log_error(context, error):
 # Инициализация Earth Engine и Google Sheets
 def initialize_services():
     try:
-        print("\n[Init] Инициализация сервисов...")
+        print("\nИнициализация сервисов...")
 
         service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
 
@@ -26,7 +26,7 @@ def initialize_services():
             key_data=json.dumps(service_account_info)
         )
         ee.Initialize(credentials)
-        print("[OK] Earth Engine: инициализирован")
+        print("Earth Engine: инициализирован")
 
         scope = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -35,7 +35,7 @@ def initialize_services():
         sheets_client = gspread.authorize(
             ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
         )
-        print("[OK] Google Sheets: авторизация прошла успешно")
+        print("Google Sheets: авторизация прошла успешно")
         return sheets_client
 
     except Exception as e:
@@ -66,7 +66,7 @@ def mask_clouds(img):
     return img.updateMask(cloud_mask)
 
 # Генерация тайлов по геометрии
-def generate_tiles(geometry, tile_size_deg=0.25):  # Уменьшенный размер тайла
+def generate_tiles(geometry, tile_size_deg=0.25):
     bounds = geometry.bounds().coordinates().get(0)
     coords = ee.List(bounds).map(lambda c: ee.List(c))
     lon_min = ee.Number(ee.List(coords.get(0)).get(0))
@@ -89,7 +89,7 @@ def generate_tiles(geometry, tile_size_deg=0.25):  # Уменьшенный ра
 # Основная логика обновления таблицы
 def update_sheet(sheets_client):
     try:
-        print("\n[Sheet] Обновление таблицы")
+        print("\nОбновление таблицы")
 
         SPREADSHEET_ID = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
         SHEET_NAME = "Sentinel-2 Покрытие"
@@ -114,7 +114,7 @@ def update_sheet(sheets_client):
                 days = calendar.monthrange(int(year), int(month_num))[1]
                 end_str = f"{year}-{month_num}-{days:02d}"
 
-                print(f"\n[Region] {region} — {start} - {end_str}")
+                print(f"\n{region} — {start} - {end_str}")
 
                 geometry = get_geometry_from_asset(region)
                 tiles = generate_tiles(geometry)
@@ -127,21 +127,30 @@ def update_sheet(sheets_client):
                         .map(mask_clouds) \
                         .map(lambda img: img.resample("bicubic")) \
                         .mosaic().clip(geom)
-                    return img
 
-                tile_images = tiles.toList(tiles.size()).map(lambda f: process_tile(ee.Feature(f)))
-                mosaic = ee.ImageCollection(tile_images).mosaic().clip(geometry)
+                    stats = img.reduceRegion(
+                        reducer=ee.Reducer.count(),
+                        geometry=geom,
+                        scale=10,
+                        maxPixels=1e9
+                    )
 
-                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
+                    pixel_count = ee.Number(stats.get("TCI_R"))
+                    return ee.Feature(tile).set({"img": img, "pixel_count": pixel_count})
 
-                # Проверка: есть ли вообще пиксели
-                stats = mosaic.reduceRegion(ee.Reducer.count(), geometry, 10)
-                if stats.get("TCI_R").getInfo() == 0:
+                processed = tiles.map(process_tile)
+                images = processed.aggregate_array("img")
+                counts = processed.aggregate_array("pixel_count")
+
+                total = ee.List(counts).reduce(ee.Reducer.sum())
+                total_val = total.getInfo()
+                if total_val == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
-                    print("[Info] Нет доступных снимков")
                     continue
 
+                mosaic = ee.ImageCollection(images).mosaic().clip(geometry)
+                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
+                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
                 tile_info = ee.data.getMapId({"image": visualized})
                 raw_mapid = tile_info["mapid"]
                 clean_mapid = raw_mapid.split("/")[-1]
@@ -162,7 +171,7 @@ if __name__ == "__main__":
     try:
         client = initialize_services()
         update_sheet(client)
-        print("\n[Done] Скрипт успешно завершен")
+        print("\nСкрипт успешно завершен")
     except Exception as e:
         log_error("main", e)
         exit(1)
