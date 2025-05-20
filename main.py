@@ -91,32 +91,39 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
+                raw_collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end_str) \
-                    .filterBounds(geometry) \
-                    .map(mask_clouds)
+                    .filterBounds(geometry)
 
-                size = collection.size().getInfo()
+                masked_collection = raw_collection.map(mask_clouds)
+
+                size = masked_collection.size().getInfo()
                 if size == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                initial_mosaic = collection.mosaic()
+                # Шаг 1: Собираем обычную мозаику
+                full_mosaic = masked_collection.mosaic()
 
-                # Отбор только тех снимков, которые реально внесли вклад
-                def contributed(image):
-                    mask = image.mask().reduce(ee.Reducer.sum())
-                    mosaic_mask = initial_mosaic.mask().reduce(ee.Reducer.sum())
-                    overlap = mask.And(mosaic_mask)
-                    return image.updateMask(overlap)
+                # Шаг 2: Определяем, какие снимки реально вносят вклад
+                def contributes(image):
+                    mask = image.mask().reduce(ee.Reducer.anyNonZero())
+                    intersection = mask.And(full_mosaic.mask().reduce(ee.Reducer.anyNonZero()))
+                    return image.set("contributes", intersection.reduceRegion(
+                        reducer=ee.Reducer.anyNonZero(),
+                        geometry=geometry,
+                        scale=100,
+                        maxPixels=1e6
+                    ).values().get(0))
 
-                contributing_images = collection.map(contributed) \
-                    .filter(ee.Filter.notNull(['B4']))  # Простой способ оставить только непустые
+                checked = masked_collection.map(contributes)
 
-                final_mosaic = contributing_images.mosaic()
+                contributing = checked.filter(ee.Filter.eq("contributes", 1))
+                refined_mosaic = contributing.mosaic()
 
+                # Визуализация
                 vis = {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000}
-                visualized = final_mosaic.select(["B4", "B3", "B2"]).visualize(**vis)
+                visualized = refined_mosaic.select(["B4", "B3", "B2"]).visualize(**vis)
 
                 tile_info = ee.data.getMapId({"image": visualized})
                 clean_mapid = tile_info["mapid"].split("/")[-1]
