@@ -1,129 +1,122 @@
 import ee
-import gspread
-import json
-import os
-import traceback
-import calendar
-from oauth2client.service_account import ServiceAccountCredentials
+import datetime
+import pandas as pd
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
-def log_error(context, error):
-    print(f"\n❌ ОШИБКА в {context}:")
-    print(f"Тип: {type(error).__name__}")
-    print(f"Сообщение: {str(error)}")
-    traceback.print_exc()
-    print("=" * 50)
+# ✅ Авторизация
+service_account_file = 'auth.json'
+credentials = service_account.Credentials.from_service_account_file(
+    service_account_file,
+    scopes=['https://www.googleapis.com/auth/spreadsheets']
+)
 
-def initialize_services():
-    try:
-        print("\nИнициализация сервисов...")
+# ✅ Инициализация Earth Engine
+try:
+    ee.Initialize()
+except Exception as e:
+    ee.Authenticate()
+    ee.Initialize()
 
-        service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
+# ✅ Параметры
+SPREADSHEET_ID = '1hZOrnmdzuBAG9JX1NUUnJVVVPt7Md3Or1jxNc_KbApw'
+SHEET_NAME = 'Tiles'
+DATE_FROM = '2024-06-01'
+DATE_TO = '2024-09-01'
+MAX_COVERAGE_PERCENT = 95  # Процент покрытия, который хотим достичь
 
-        credentials = ee.ServiceAccountCredentials(
-            service_account_info["client_email"],
-            key_data=json.dumps(service_account_info)
-        )
-        ee.Initialize(credentials)
-        print("✅ Earth Engine: инициализирован")
+# ✅ Сервис Google Sheets
+def get_sheets_service():
+    return build('sheets', 'v4', credentials=credentials).spreadsheets()
 
-        scope = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        sheets_client = gspread.authorize(
-            ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
-        )
-        print("✅ Google Sheets: авторизация прошла успешно")
-        return sheets_client
+def update_sheet(service, values):
+    body = {'values': values}
+    service.values().clear(spreadsheetId=SPREADSHEET_ID, range=f'{SHEET_NAME}!A2:B1000').execute()
+    service.values().update(spreadsheetId=SPREADSHEET_ID, range=f'{SHEET_NAME}!A2', valueInputOption='RAW', body=body).execute()
 
-    except Exception as e:
-        log_error("initialize_services", e)
-        raise
+# ✅ Чтение тайлов из таблицы
+sheet_service = get_sheets_service()
+tile_geometries = sheet_service.values().get(spreadsheetId=SPREADSHEET_ID, range=f'{SHEET_NAME}!A2:A').execute().get('values', [])
+tile_geometries = [ee.Geometry.Rectangle(eval(row[0])) for row in tile_geometries if row]
 
-def month_str_to_number(name):
-    months = {
-        "Январь": "01", "Февраль": "02", "Март": "03", "Апрель": "04",
-        "Май": "05", "Июнь": "06", "Июль": "07", "Август": "08",
-        "Сентябрь": "09", "Октябрь": "10", "Ноябрь": "11", "Декабрь": "12"
+# ✅ Маскирование облаков по SCL
+CLOUDY = [3, 7, 8, 9, 10, 11]
+def mask_scl(image):
+    scl = image.select('SCL')
+    mask = ~scl.isin(CLOUDY)
+    return image.updateMask(mask)
+
+# ✅ Обработка тайла
+def process_tile(geom):
+    region_area = geom.area()
+
+    collection = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')\
+        .filterDate(DATE_FROM, DATE_TO)\
+        .filterBounds(geom)\
+        .map(mask_scl)\
+        .sort('CLOUDY_PIXEL_PERCENTAGE')
+
+    def add_mask(image):
+        return image.set('mask_area', image.select('B8').mask().reduceRegion(
+            reducer=ee.Reducer.sum(),
+            geometry=geom,
+            scale=20,
+            maxPixels=1e8
+        ).get('B8'))
+
+    images_with_mask = collection.map(add_mask)
+    image_list = images_with_mask.toList(images_with_mask.size())
+
+    def get_selected():
+        coverage = ee.Image(0)
+        total_area = ee.Number(0)
+        selected = []
+        i = 0
+        while i < image_list.size().getInfo():
+            img = ee.Image(image_list.get(i))
+            mask = img.select('B8').mask()
+            coverage = coverage.unmask(0).Or(mask)
+
+            current_area = coverage.reduceRegion(
+                reducer=ee.Reducer.sum(),
+                geometry=geom,
+                scale=20,
+                maxPixels=1e8
+            ).getNumber('B8')
+
+            percent = current_area.multiply(20*20).divide(region_area).multiply(100)
+            selected.append(img)
+            if percent.gte(MAX_COVERAGE_PERCENT):
+                break
+            i += 1
+        return selected
+
+    selected_images = get_selected()
+
+    if not selected_images:
+        return ['Нет снимков']
+
+    mosaic = ee.ImageCollection.fromImages(selected_images).mosaic()
+    vis_params = {
+        'bands': ['TCI_R', 'TCI_G', 'TCI_B'],
+        'min': 0,
+        'max': 3000,
+        'format': 'jpg'
     }
-    return months.get(name.strip().capitalize(), None)
+    tile_info = ee.data.getMapId({'image': mosaic.visualize(**vis_params), 'format': 'jpg', 'resampling': 'bilinear'})
+    raw_mapid = tile_info['tile_fetcher'].url_format
+    clean_mapid = raw_mapid.split("/")[-2]
+    xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
+    return [str(geom.bounds().coordinates().getInfo()), xyz]
 
-def get_geometry_from_asset(region_name):
-    fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
-    region = fc.filter(ee.Filter.eq("title", region_name)).first()
-    if region is None:
-        raise ValueError(f"Регион '{region_name}' не найден в ассете")
-    return region.geometry()
-
-def mask_clouds(img):
-    scl = img.select("SCL")
-    cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
-    return img.updateMask(cloud_mask).resample("bilinear")
-
-def update_sheet(sheets_client):
+# ✅ Основной цикл
+results = []
+for tile_geom in tile_geometries:
     try:
-        print("\n📊 Обновление таблицы")
-
-        SPREADSHEET_ID = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
-        SHEET_NAME = "Sentinel-2 Покрытие"
-
-        spreadsheet = sheets_client.open_by_key(SPREADSHEET_ID)
-        worksheet = spreadsheet.worksheet(SHEET_NAME)
-        data = worksheet.get_all_values()
-
-        for row_idx, row in enumerate(data[1:], start=2):
-            try:
-                region, date_str = row[:2]
-                if not region or not date_str:
-                    continue
-
-                parts = date_str.strip().split()
-                if len(parts) != 2:
-                    raise ValueError(f"Неверный формат даты: '{date_str}'")
-
-                month_num = month_str_to_number(parts[0])
-                year = parts[1]
-                start = f"{year}-{month_num}-01"
-                days = calendar.monthrange(int(year), int(month_num))[1]
-                end_str = f"{year}-{month_num}-{days:02d}"
-
-                print(f"\n🌍 {region} — {start} - {end_str}")
-
-                geometry = get_geometry_from_asset(region)
-
-                collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
-                    .filterDate(start, end_str) \
-                    .filterBounds(geometry) \
-                    .map(mask_clouds)
-
-                size = collection.size().getInfo()
-                if size == 0:
-                    worksheet.update_cell(row_idx, 3, "Нет снимков")
-                    continue
-
-                mosaic = collection.mosaic()
-                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
-
-                tile_info = ee.data.getMapId({"image": visualized})
-                clean_mapid = tile_info["mapid"].split("/")[-1]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
-
-                worksheet.update_cell(row_idx, 3, xyz)
-
-            except Exception as e:
-                log_error(f"Строка {row_idx}", e)
-                worksheet.update_cell(row_idx, 3, f"Ошибка: {str(e)[:100]}")
-
+        row = process_tile(tile_geom)
+        results.append(row)
     except Exception as e:
-        log_error("update_sheet", e)
-        raise
+        results.append([str(tile_geom.bounds().coordinates().getInfo()), f"Ошибка: {e}"])
 
-if __name__ == "__main__":
-    try:
-        client = initialize_services()
-        update_sheet(client)
-        print("\n✅ Скрипт успешно завершен")
-    except Exception as e:
-        log_error("main", e)
-        exit(1)
+update_sheet(sheet_service, results)
+print("✅ Готово")
