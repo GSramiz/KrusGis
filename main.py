@@ -15,7 +15,7 @@ def log_error(context, error):
 
 def initialize_services():
     try:
-        print("\nИниниализация сервисов...")
+        print("\nИнициализация сервисов...")
 
         service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
 
@@ -91,53 +91,25 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
+                # 🔸 Расчёт лимита по площади с запасом 30%
+                area_km2 = geometry.area().divide(1e6)
+                max_images = area_km2.divide(10000).multiply(1.3).ceil().int()
+                max_images_int = max_images.getInfo()
+
+                print(f"📐 Площадь: {area_km2.getInfo():,.0f} км² → Лимит снимков: {max_images_int}")
+
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end_str) \
                     .filterBounds(geometry) \
-                    .map(mask_clouds)
+                    .map(mask_clouds) \
+                    .limit(max_images_int)
 
                 size = collection.size().getInfo()
                 if size == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                images = collection.toList(collection.size())
-                region_area = geometry.area(1).getInfo()
-                covered_mask = ee.Image(0).byte().clip(geometry)
-                selected_images = []
-
-                coverage_threshold = 0.9  # >=90%
-                total_covered_area = 0.0
-                i = 0
-
-                while total_covered_area / region_area < coverage_threshold and i < size:
-                    img = ee.Image(images.get(i))
-                    mask = img.select("B8").mask().clip(geometry).gt(0)
-                    new_mask = mask.And(covered_mask.Not())
-                    added_area = new_mask.multiply(ee.Image.pixelArea()).reduceRegion(
-                        reducer=ee.Reducer.sum(),
-                        geometry=geometry,
-                        scale=20,
-                        maxPixels=1e9
-                    ).get("B8")
-
-                    try:
-                        added_area_val = ee.Number(added_area).getInfo()
-                        if added_area_val > 0:
-                            selected_images.append(img)
-                            covered_mask = covered_mask.Or(mask)
-                            total_covered_area += added_area_val
-                    except Exception as e:
-                        log_error(f"Ошибка при расчёте площади снимка #{i}", e)
-
-                    i += 1
-
-                if not selected_images:
-                    worksheet.update_cell(row_idx, 3, "Недостаточно данных для мозаики")
-                    continue
-
-                mosaic = ee.ImageCollection(selected_images).mosaic()
-
+                mosaic = collection.mosaic()
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
                 visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
 
