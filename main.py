@@ -121,41 +121,27 @@ def update_sheet(sheets_client):
 
                 def process_tile(tile):
                     geom = tile.geometry()
-                    img = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
+                    collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                         .filterDate(start, end_str) \
                         .filterBounds(geom) \
-                        .map(mask_clouds) \
-                        .map(lambda img: img.resample("bicubic")) \
-                        .mosaic().clip(geom)
+                        .map(mask_clouds)
 
-                    stats = img.reduceRegion(
-                        reducer=ee.Reducer.count(),
-                        geometry=geom,
-                        scale=10,
-                        maxPixels=1e9
-                    )
+                    mosaic = collection.mosaic()
+                    return mosaic.clip(geom)
 
-                    pixel_count = ee.Number(stats.get("TCI_R"))
-                    return ee.Feature(tile).set({"img": img, "pixel_count": pixel_count})
+                tile_images = tiles.toList(tiles.size()).map(lambda f: process_tile(ee.Feature(f)))
+                image_collection = ee.ImageCollection(tile_images)
 
-                processed = tiles.map(process_tile)
-                images = processed.aggregate_array("img")
-                counts = processed.aggregate_array("pixel_count")
-
-                total = ee.List(counts).reduce(ee.Reducer.sum())
-                total_val = total.getInfo()
-                if total_val == 0:
+                size = image_collection.size().getInfo()
+                if size == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                mosaic = ee.ImageCollection(images).mosaic().clip(geometry)
+                mosaic = image_collection.mosaic().clip(geometry)
                 vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
                 visualized = mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
                 tile_info = ee.data.getMapId({"image": visualized})
-                raw_mapid = tile_info["mapid"]
-                clean_mapid = raw_mapid.split("/")[-1]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
-
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{tile_info['mapid']}/tiles/{{z}}/{{x}}/{{y}}"
                 worksheet.update_cell(row_idx, 3, xyz)
 
             except Exception as e:
