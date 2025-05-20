@@ -77,17 +77,17 @@ def build_mosaic_from_contributing_images(collection, region):
             maxPixels=1e8
         ).values().get(0)
 
-        contributing = ee.Algorithms.If(
+        updated_contributing = ee.Algorithms.If(
             ee.Algorithms.IsEqual(has_contribution, 1),
             contributing.add(img),
             contributing
         )
 
-        mosaic = img.unmask(mosaic)
+        updated_mosaic = img.unmask(mosaic)
 
         return ee.Dictionary({
-            "mosaic": mosaic,
-            "contributing": contributing
+            "mosaic": updated_mosaic,
+            "contributing": updated_contributing
         })
 
     init = ee.Dictionary({
@@ -95,8 +95,9 @@ def build_mosaic_from_contributing_images(collection, region):
         "contributing": ee.List([])
     })
 
-    result = ee.List(collection.iterate(iterate_fn, init).get("contributing"))
-    return ee.ImageCollection(result).mosaic()
+    result_dict = ee.Dictionary(collection.iterate(iterate_fn, init))
+    contributing_images = ee.List(result_dict.get("contributing"))
+    return ee.ImageCollection(contributing_images).mosaic()
 
 def update_sheet(sheets_client):
     try:
@@ -139,10 +140,10 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                filtered_mosaic = build_mosaic_from_contributing_images(collection, geometry)
+                final_mosaic = build_mosaic_from_contributing_images(collection, geometry)
 
                 vis = {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000}
-                visualized = filtered_mosaic.select(["B4", "B3", "B2"]).visualize(**vis)
+                visualized = final_mosaic.select(["B4", "B3", "B2"]).visualize(**vis)
 
                 tile_info = ee.data.getMapId({"image": visualized})
                 clean_mapid = tile_info["mapid"].split("/")[-1]
