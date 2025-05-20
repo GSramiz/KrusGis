@@ -101,28 +101,10 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Предварительная мозаика
-                mosaic = collection.mosaic()
+                filtered_mosaic = collection.mosaic()
 
-                # Исключаем снимки, не вносящие вклад
-                def contributed(img):
-                    mask = img.mask().reduce(ee.Reducer.anyNonZero())
-                    mosaic_mask = mosaic.mask().reduce(ee.Reducer.anyNonZero())
-                    overlap = mask.And(mosaic_mask)
-                    return img.updateMask(overlap)
-
-                def has_mask(img):
-                    mask = img.mask().reduce(ee.Reducer.anyNonZero())
-                    return img.set("has_mask", mask)
-
-                filtered_collection = collection.map(contributed).map(has_mask) \
-                    .filter(ee.Filter.eq("has_mask", 1))
-
-                # Финальная мозаика
-                filtered_mosaic = filtered_collection.mosaic()
-
-                vis = {"bands": ["TCI_R", "TCI_G", "TCI_B"], "min": 0, "max": 255}
-                visualized = filtered_mosaic.select(["TCI_R", "TCI_G", "TCI_B"]).visualize(**vis)
+                vis = {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000}
+                visualized = filtered_mosaic.select(["B4", "B3", "B2"]).visualize(**vis)
 
                 tile_info = ee.data.getMapId({"image": visualized})
                 clean_mapid = tile_info["mapid"].split("/")[-1]
