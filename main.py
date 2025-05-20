@@ -60,45 +60,6 @@ def mask_clouds(img):
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
     return img.updateMask(cloud_mask).resample("bilinear")
 
-def build_mosaic_from_contributing_images(collection, region):
-    def iterate_fn(img, state):
-        state = ee.Dictionary(state)
-        mosaic = ee.Image(state.get("mosaic"))
-        contributing = ee.List(state.get("contributing"))
-
-        img_mask = img.mask().reduce(ee.Reducer.min())
-        mosaic_mask = mosaic.mask().reduce(ee.Reducer.min())
-        new_area = img_mask.And(mosaic_mask.Not())
-
-        has_contribution = new_area.reduceRegion(
-            reducer=ee.Reducer.anyNonZero(),
-            geometry=region,
-            scale=20,
-            maxPixels=1e8
-        ).values().get(0)
-
-        updated_contributing = ee.Algorithms.If(
-            ee.Algorithms.IsEqual(has_contribution, 1),
-            contributing.add(img),
-            contributing
-        )
-
-        updated_mosaic = img.unmask(mosaic)
-
-        return ee.Dictionary({
-            "mosaic": updated_mosaic,
-            "contributing": updated_contributing
-        })
-
-    init = ee.Dictionary({
-        "mosaic": ee.Image(0).updateMask(ee.Image(0)),
-        "contributing": ee.List([])
-    })
-
-    result_dict = ee.Dictionary(collection.iterate(iterate_fn, init))
-    contributing_images = ee.List(result_dict.get("contributing"))
-    return ee.ImageCollection(contributing_images).mosaic()
-
 def update_sheet(sheets_client):
     try:
         print("\n📊 Обновление таблицы")
@@ -140,7 +101,19 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                final_mosaic = build_mosaic_from_contributing_images(collection, geometry)
+                initial_mosaic = collection.mosaic()
+
+                # Отбор только тех снимков, которые реально внесли вклад
+                def contributed(image):
+                    mask = image.mask().reduce(ee.Reducer.sum())
+                    mosaic_mask = initial_mosaic.mask().reduce(ee.Reducer.sum())
+                    overlap = mask.And(mosaic_mask)
+                    return image.updateMask(overlap)
+
+                contributing_images = collection.map(contributed) \
+                    .filter(ee.Filter.notNull(['B4']))  # Простой способ оставить только непустые
+
+                final_mosaic = contributing_images.mosaic()
 
                 vis = {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000}
                 visualized = final_mosaic.select(["B4", "B3", "B2"]).visualize(**vis)
