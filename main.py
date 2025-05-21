@@ -92,11 +92,11 @@ def update_sheet(sheets_client):
                 geometry = get_geometry_from_asset(region)
 
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
-                    .filterDate(start, end_str) \
-                    .filterBounds(geometry) \
-                    .map(mask_clouds) \
-                    .sort("CLOUDY_PIXEL_PERCENTAGE") \
-                    .limit(100)
+    .filterDate(start, end_str) \
+    .filterBounds(geometry) \
+    .sort("CLOUDY_PIXEL_PERCENTAGE") \
+    .limit(100) \
+    .map(mask_clouds)
 
                 size = collection.size().getInfo()
                 if size == 0:
@@ -105,11 +105,8 @@ def update_sheet(sheets_client):
 
                 filtered_mosaic = collection.mosaic()
 
-                # Контрастная визуализация через кубический корень
-                rgb = filtered_mosaic.select(["B4", "B3", "B2"]) \
-                    .unitScale(0, 10000).pow(1/3)
-
-                visualized = rgb.visualize(min=0, max=1)
+                vis = {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000}
+                visualized = filtered_mosaic.select(["B4", "B3", "B2"]).visualize(**vis)
 
                 tile_info = ee.data.getMapId({"image": visualized})
                 clean_mapid = tile_info["mapid"].split("/")[-1]
