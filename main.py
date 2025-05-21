@@ -104,7 +104,7 @@ def update_sheet(sheets_client):
                     continue
 
                 filtered_mosaic = collection.mosaic()
-                normalized_rgb = filtered_mosaic.select(["B4", "B3", "B2"]).divide(3000)
+                normalized_rgb = filtered_mosaic.select(["B4", "B3", "B2"]).clamp(0, 6000).divide(6000)
 
                 tile_info = ee.data.getMapId({"image": normalized_rgb})
                 clean_mapid = tile_info["mapid"].split("/")[-1]
