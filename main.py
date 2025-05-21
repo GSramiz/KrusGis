@@ -55,15 +55,10 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
-def mask_clouds_s2cloudless(img):
-    cloud_prob = ee.ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY") \
-        .filterBounds(img.geometry()) \
-        .filterDate(img.date(), img.date().advance(1, "day")) \
-        .first()
-
-    cloud_prob = ee.Image(ee.Algorithms.If(cloud_prob, cloud_prob, ee.Image(0)))
-    img = img.addBands(cloud_prob.rename("cloud_probability"))
-    return img.updateMask(img.select("cloud_probability").lt(30)).resample("bilinear")
+def mask_clouds(img):
+    scl = img.select("SCL")
+    cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
+    return img.updateMask(cloud_mask).resample("bilinear")
 
 def update_sheet(sheets_client):
     try:
@@ -99,7 +94,7 @@ def update_sheet(sheets_client):
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end_str) \
                     .filterBounds(geometry) \
-                    .map(mask_clouds_s2cloudless)
+                    .map(mask_clouds)
 
                 size = collection.size().getInfo()
                 if size == 0:
