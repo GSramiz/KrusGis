@@ -107,8 +107,9 @@ def update_sheet(sheets_client):
                 normalized_rgb = filtered_mosaic.select(["B4", "B3", "B2"]).divide(3000)
 
                 tile_info = ee.data.getMapId({"image": normalized_rgb})
+                clean_mapid = tile_info["mapid"].split("/")[-1]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
-
+                
                 worksheet.update_cell(row_idx, 3, xyz)
 
             except Exception as e:
