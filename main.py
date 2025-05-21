@@ -96,6 +96,7 @@ def update_sheet(sheets_client):
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end_str) \
                     .filterBounds(geometry) \
+                    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
                     .map(mask_clouds)
 
                 # Быстрая проверка наличия снимков через .first()
