@@ -94,8 +94,6 @@ def update_sheet(sheets_client):
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end_str) \
                     .filterBounds(geometry) \
-                    .sort("CLOUDY_PIXEL_PERCENTAGE") \
-                    .limit(500) \
                     .map(mask_clouds)
 
                 size = collection.size().getInfo()
@@ -104,12 +102,14 @@ def update_sheet(sheets_client):
                     continue
 
                 filtered_mosaic = collection.mosaic()
-                normalized_rgb = filtered_mosaic.select(["B4", "B3", "B2"]).clamp(0, 6000).divide(6000)
 
-                tile_info = ee.data.getMapId({"image": normalized_rgb})
+                vis = {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000}
+                visualized = filtered_mosaic.select(["B4", "B3", "B2"]).visualize(**vis)
+
+                tile_info = ee.data.getMapId({"image": visualized})
                 clean_mapid = tile_info["mapid"].split("/")[-1]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
-                
+
                 worksheet.update_cell(row_idx, 3, xyz)
 
             except Exception as e:
