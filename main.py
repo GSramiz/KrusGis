@@ -40,22 +40,25 @@ def initialize_services():
         log_error("initialize_services", e)
         raise
 
-def month_str_to_number(month_str):
+def month_str_to_number(name):
     months = {
-        "январь": "01", "февраль": "02", "март": "03", "апрель": "04",
-        "май": "05", "июнь": "06", "июль": "07", "август": "08",
-        "сентябрь": "09", "октябрь": "10", "ноябрь": "11", "декабрь": "12"
+        "Январь": "01", "Февраль": "02", "Март": "03", "Апрель": "04",
+        "Май": "05", "Июнь": "06", "Июль": "07", "Август": "08",
+        "Сентябрь": "09", "Октябрь": "10", "Ноябрь": "11", "Декабрь": "12"
     }
-    return months.get(month_str.lower(), "01")
+    return months.get(name.strip().capitalize(), None)
 
-def get_geometry_from_asset(region):
-    asset_path = f"users/your_username/regions/{region}"
-    return ee.FeatureCollection(asset_path).geometry()
+def get_geometry_from_asset(region_name):
+    fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
+    region = fc.filter(ee.Filter.eq("title", region_name)).first()
+    if region is None:
+        raise ValueError(f"Регион '{region_name}' не найден в ассете")
+    return region.geometry()
 
 def mask_clouds(img):
     scl = img.select("SCL")
     cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
-    return img.updateMask(cloud_mask)
+    return img.updateMask(cloud_mask).resample("bilinear")
 
 def update_sheet(sheets_client):
     try:
@@ -88,48 +91,37 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                raw_collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
+                collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end_str) \
                     .filterBounds(geometry) \
                     .map(mask_clouds)
 
-                # Добавляем уникальный 'source' слой по system:index
-                def add_source_band(img):
-                    return img.addBands(
-                        ee.Image.constant(1).rename("source")
-                        .updateMask(img.mask().reduce(ee.Reducer.min()))
-                    ).set("system:index", img.get("system:index"))
-
-                with_source = raw_collection.map(add_source_band)
-
-                # Строим мозаику из слоя 'source'
-                source_mosaic = with_source.select("source").mosaic()
-
-                # Получаем ID снимков, у которых хоть один пиксель остался в мозаике
-                def was_used(img):
-                    source_mask = img.select("source")
-                    overlap = source_mosaic.And(source_mask)
-                    any_overlap = overlap.reduceRegion(
-                        reducer=ee.Reducer.anyNonZero(),
-                        geometry=geometry,
-                        scale=1000,
-                        maxPixels=1e6
-                    )
-                    return ee.Feature(None, {
-                        "system:index": img.get("system:index"),
-                        "used": any_overlap.values().contains(True)
-                    })
-
-                used_features = with_source.map(was_used).filter(ee.Filter.eq("used", True))
-                used_ids = used_features.aggregate_array("system:index")
-                filtered_collection = with_source.filter(ee.Filter.inList("system:index", used_ids))
-
-                size = filtered_collection.size().getInfo()
+                size = collection.size().getInfo()
                 if size == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                final_mosaic = filtered_collection.mosaic()
+                # Сначала создаём черновую мозаику
+                initial_mosaic = collection.mosaic()
+
+                # Получаем ID снимков, которые что-то добавляют в мозаику
+                contributing_ids = ee.List(collection.aggregate_array("system:index"))
+
+                def contributes(image):
+                    id = image.get("system:index")
+                    mosaic_mask = initial_mosaic.mask().reduce(ee.Reducer.max())
+                    image_mask = image.mask().reduce(ee.Reducer.max())
+                    overlap = image_mask.And(mosaic_mask)
+                    return image.set("contributes", overlap.reduceRegion(
+                        reducer=ee.Reducer.anyNonZero(),
+                        geometry=geometry,
+                        scale=100,
+                        maxPixels=1e6
+                    ).values().get(0))
+
+                filtered = collection.map(contributes).filter(ee.Filter.eq("contributes", 1))
+
+                final_mosaic = filtered.mosaic()
 
                 vis = {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000}
                 visualized = final_mosaic.select(["B4", "B3", "B2"]).visualize(**vis)
@@ -148,5 +140,11 @@ def update_sheet(sheets_client):
         log_error("update_sheet", e)
         raise
 
-# Запуск
-update_sheet(gs_client)
+if __name__ == "__main__":
+    try:
+        client = initialize_services()
+        update_sheet(client)
+        print("\n✅ Скрипт успешно завершен")
+    except Exception as e:
+        log_error("main", e)
+        exit(1)
