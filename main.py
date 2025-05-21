@@ -6,8 +6,12 @@ import traceback
 import calendar
 from oauth2client.service_account import ServiceAccountCredentials
 
+# Конфигурация
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY")
+SHEET_NAME = "Sentinel-2 Покрытие"
+
 def log_error(context, error):
-    print(f"\n❌ ОШИБКА в {context}:")
+    print(f"\ОШИБКА в {context}:")
     print(f"Тип: {type(error).__name__}")
     print(f"Сообщение: {str(error)}")
     traceback.print_exc()
@@ -24,7 +28,7 @@ def initialize_services():
             key_data=json.dumps(service_account_info)
         )
         ee.Initialize(credentials)
-        print("✅ Earth Engine: инициализирован")
+        print("Earth Engine: инициализирован")
 
         scope = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -33,7 +37,7 @@ def initialize_services():
         sheets_client = gspread.authorize(
             ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
         )
-        print("✅ Google Sheets: авторизация прошла успешно")
+        print("Google Sheets: авторизация прошла успешно")
         return sheets_client
 
     except Exception as e:
@@ -57,15 +61,13 @@ def get_geometry_from_asset(region_name):
 
 def mask_clouds(img):
     scl = img.select("SCL")
-    cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
-    return img.updateMask(cloud_mask).resample("bilinear")
+    # Оставляем только "чистые" пиксели: 4 (vegetation), 5 (non-vegetated), 6 (water), 7 (unclassified)
+    allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
+    return img.updateMask(allowed).resample("bilinear")
 
 def update_sheet(sheets_client):
     try:
-        print("\n📊 Обновление таблицы")
-
-        SPREADSHEET_ID = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
-        SHEET_NAME = "Sentinel-2 Покрытие"
+        print("Обновление таблицы")
 
         spreadsheet = sheets_client.open_by_key(SPREADSHEET_ID)
         worksheet = spreadsheet.worksheet(SHEET_NAME)
@@ -87,7 +89,7 @@ def update_sheet(sheets_client):
                 days = calendar.monthrange(int(year), int(month_num))[1]
                 end_str = f"{year}-{month_num}-{days:02d}"
 
-                print(f"\n🌍 {region} — {start} - {end_str}")
+                print(f"\n {region} — {start} - {end_str}")
 
                 geometry = get_geometry_from_asset(region)
 
@@ -96,15 +98,15 @@ def update_sheet(sheets_client):
                     .filterBounds(geometry) \
                     .map(mask_clouds)
 
-                size = collection.size().getInfo()
-                if size == 0:
+                # Быстрая проверка наличия снимков через .first()
+                if collection.first().getInfo() is None:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
                 filtered_mosaic = collection.mosaic()
 
                 vis = {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000}
-                visualized = filtered_mosaic.select(["B4", "B3", "B2"]).visualize(**vis)
+                visualized = filtered_mosaic.visualize(**vis)  # без .select()
 
                 tile_info = ee.data.getMapId({"image": visualized})
                 clean_mapid = tile_info["mapid"].split("/")[-1]
@@ -124,7 +126,7 @@ if __name__ == "__main__":
     try:
         client = initialize_services()
         update_sheet(client)
-        print("\n✅ Скрипт успешно завершен")
+        print("Скрипт успешно завершен")
     except Exception as e:
         log_error("main", e)
         exit(1)
