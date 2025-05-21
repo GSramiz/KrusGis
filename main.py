@@ -1,63 +1,142 @@
 import ee
-import os
-import json
-import datetime
 import gspread
+import json
+import os
+import traceback
+import calendar
+from oauth2client.service_account import ServiceAccountCredentials
 
-# Авторизация Earth Engine через переменную окружения GEE_CREDENTIALS
-service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
-credentials = ee.ServiceAccountCredentials(
-    service_account_info["client_email"],
-    key_data=json.dumps(service_account_info)
-)
-ee.Initialize(credentials)
+def log_error(context, error):
+    print(f"\n❌ ОШИБКА в {context}:")
+    print(f"Тип: {type(error).__name__}")
+    print(f"Сообщение: {str(error)}")
+    traceback.print_exc()
+    print("=" * 50)
 
-# Авторизация Google Sheets
-sheets_client = gspread.service_account_from_dict(service_account_info)
-sheet = sheets_client.open_by_url(os.environ["GSHEET_URL"]).sheet1
+def initialize_services():
+    try:
+        print("\nИнициализация сервисов...")
 
-# Настройки
-region = ee.Geometry.Polygon(json.loads(os.environ["REGION_COORDS"]))
-start_date = os.environ["START_DATE"]
-end_date = os.environ["END_DATE"]
-tile_scale = 4
+        service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
 
-# Получение коллекции Sentinel-2 и маскирование облаков по SCL
-collection = (
-    ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
-    .filterBounds(region)
-    .filterDate(start_date, end_date)
-    .map(lambda img: img.updateMask(img.select('SCL').neq(3)  # облака
-                                     .And(img.select('SCL').neq(8))  # облака
-                                     .And(img.select('SCL').neq(9))  # тень
-                                     .And(img.select('SCL').neq(10))  # облака
-                                     .And(img.select('SCL').neq(1))))  # saturated
-)
+        credentials = ee.ServiceAccountCredentials(
+            service_account_info["client_email"],
+            key_data=json.dumps(service_account_info)
+        )
+        ee.Initialize(credentials)
+        print("✅ Earth Engine: инициализирован")
 
-# Сортировка по дате и сборка мозаики
-collection = collection.sort('system:time_start')
-mosaic = collection.mosaic().clip(region)
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        sheets_client = gspread.authorize(
+            ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
+        )
+        print("✅ Google Sheets: авторизация прошла успешно")
+        return sheets_client
 
-# Определение снимков, которые реально видимы в мозайке
-visible_ids = collection
-    .map(lambda img: img.set('visible', mosaic.eq(img).reduceRegion(
-        reducer=ee.Reducer.anyNonZero(),
-        geometry=region,
-        scale=10,
-        maxPixels=1e8
-    ).values().contains(True)))
-    .filter(ee.Filter.eq('visible', True))
-    .aggregate_array('system:index')
+    except Exception as e:
+        log_error("initialize_services", e)
+        raise
 
-# Отбор только реально отображающихся снимков
-filtered_collection = collection.filter(ee.Filter.inList('system:index', visible_ids))
+def month_str_to_number(name):
+    months = {
+        "Январь": "01", "Февраль": "02", "Март": "03", "Апрель": "04",
+        "Май": "05", "Июнь": "06", "Июль": "07", "Август": "08",
+        "Сентябрь": "09", "Октябрь": "10", "Ноябрь": "11", "Декабрь": "12"
+    }
+    return months.get(name.strip().capitalize(), None)
 
-# Финальная мозаика только из видимых снимков
-final_mosaic = filtered_collection.mosaic().clip(region)
+def get_geometry_from_asset(region_name):
+    fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
+    region = fc.filter(ee.Filter.eq("title", region_name)).first()
+    if region is None:
+        raise ValueError(f"Регион '{region_name}' не найден в ассете")
+    return region.geometry()
 
-# Генерация XYZ-ссылки
-url = final_mosaic.visualize(min=0, max=3000, bands=['TCI_R', 'TCI_G', 'TCI_B']) \
-    .getMapId()['tile_fetcher'].url_format
+def mask_clouds(img):
+    scl = img.select("SCL")
+    cloud_mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
+    return img.updateMask(cloud_mask).resample("bilinear")
 
-# Загрузка ссылки в Google Sheets
-sheet.append_row([str(datetime.datetime.now()), url])
+def update_sheet(sheets_client):
+    try:
+        print("\n📊 Обновление таблицы")
+
+        SPREADSHEET_ID = "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY"
+        SHEET_NAME = "Sentinel-2 Покрытие"
+
+        spreadsheet = sheets_client.open_by_key(SPREADSHEET_ID)
+        worksheet = spreadsheet.worksheet(SHEET_NAME)
+        data = worksheet.get_all_values()
+
+        for row_idx, row in enumerate(data[1:], start=2):
+            try:
+                region, date_str = row[:2]
+                if not region or not date_str:
+                    continue
+
+                parts = date_str.strip().split()
+                if len(parts) != 2:
+                    raise ValueError(f"Неверный формат даты: '{date_str}'")
+
+                month_num = month_str_to_number(parts[0])
+                year = parts[1]
+                start = f"{year}-{month_num}-01"
+                days = calendar.monthrange(int(year), int(month_num))[1]
+                end_str = f"{year}-{month_num}-{days:02d}"
+
+                print(f"\n🌍 {region} — {start} - {end_str}")
+
+                geometry = get_geometry_from_asset(region)
+
+                collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
+                    .filterDate(start, end_str) \
+                    .filterBounds(geometry) \
+                    .map(mask_clouds)
+
+                size = collection.size().getInfo()
+                if size == 0:
+                    worksheet.update_cell(row_idx, 3, "Нет снимков")
+                    continue
+
+                initial_mosaic = collection.mosaic()
+
+                # Получаем ID снимков, реально видимых в мозаике
+                def is_visible(img):
+                    equal = initial_mosaic.eq(img)
+                    return img.set('visible', equal.reduceRegion(
+                        reducer=ee.Reducer.anyNonZero(), geometry=geometry, scale=1000
+                    ).values().get(0))
+
+                visible = collection.map(is_visible) \
+                    .filter(ee.Filter.eq('visible', 1))
+
+                final_mosaic = visible.mosaic()
+
+                vis = {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000}
+                visualized = final_mosaic.select(["B4", "B3", "B2"]).visualize(**vis)
+
+                tile_info = ee.data.getMapId({"image": visualized})
+                clean_mapid = tile_info["mapid"].split("/")[-1]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
+
+                worksheet.update_cell(row_idx, 3, xyz)
+
+            except Exception as e:
+                log_error(f"Строка {row_idx}", e)
+                worksheet.update_cell(row_idx, 3, f"Ошибка: {str(e)[:100]}")
+
+    except Exception as e:
+        log_error("update_sheet", e)
+        raise
+
+if __name__ == "__main__":
+    try:
+        client = initialize_services()
+        update_sheet(client)
+        print("\n✅ Скрипт успешно завершен")
+    except Exception as e:
+        log_error("main", e)
+        exit(1)
