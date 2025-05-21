@@ -93,12 +93,14 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
-                    .filterDate(start, end_str) \
-                    .filterBounds(geometry) \
-                    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
-                    .map(mask_clouds)
-
+                collection = (
+                ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+                .filterDate(start, end_str)
+                .filterBounds(geometry)
+                .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
+                .map(mask_clouds)
+)
+                
                 # Быстрая проверка наличия снимков через .first()
                 if collection.first().getInfo() is None:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
