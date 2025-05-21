@@ -1,22 +1,44 @@
 import ee
-import os
 import gspread
+import json
+import os
+import traceback
 import calendar
-from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Инициализация Earth Engine
-service_account = os.environ.get("EE_SERVICE_ACCOUNT")
-credentials = ee.ServiceAccountCredentials(service_account, os.environ.get("EE_PRIVATE_KEY"))
-ee.Initialize(credentials)
+def log_error(context, error):
+    print(f"\n❌ ОШИБКА в {context}:")
+    print(f"Тип: {type(error).__name__}")
+    print(f"Сообщение: {str(error)}")
+    traceback.print_exc()
+    print("=" * 50)
 
-# Авторизация Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-gs_credentials = ServiceAccountCredentials.from_json_keyfile_name(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"), scope)
-gs_client = gspread.authorize(gs_credentials)
+def initialize_services():
+    try:
+        print("\nИнициализация сервисов...")
 
-def log_error(context, e):
-    print(f"\n❌ Ошибка в {context}: {str(e)}")
+        service_account_info = json.loads(os.environ["GEE_CREDENTIALS"])
+
+        credentials = ee.ServiceAccountCredentials(
+            service_account_info["client_email"],
+            key_data=json.dumps(service_account_info)
+        )
+        ee.Initialize(credentials)
+        print("✅ Earth Engine: инициализирован")
+
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        sheets_client = gspread.authorize(
+            ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
+        )
+        print("✅ Google Sheets: авторизация прошла успешно")
+        return sheets_client
+
+    except Exception as e:
+        log_error("initialize_services", e)
+        raise
 
 def month_str_to_number(month_str):
     months = {
