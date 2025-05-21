@@ -94,29 +94,22 @@ def update_sheet(sheets_client):
                 collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
                     .filterDate(start, end_str) \
                     .filterBounds(geometry) \
-                    .map(mask_clouds)
+                    .map(mask_clouds) \
+                    .sort("CLOUDY_PIXEL_PERCENTAGE") \
+                    .limit(100)
 
                 size = collection.size().getInfo()
                 if size == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                initial_mosaic = collection.mosaic()
+                filtered_mosaic = collection.mosaic()
 
-                # Получаем ID снимков, реально видимых в мозаике
-                def is_visible(img):
-                    equal = initial_mosaic.eq(img)
-                    return img.set('visible', equal.reduceRegion(
-                        reducer=ee.Reducer.anyNonZero(), geometry=geometry, scale=1000
-                    ).values().get(0))
+                # Контрастная визуализация через кубический корень
+                rgb = filtered_mosaic.select(["B4", "B3", "B2"]) \
+                    .unitScale(0, 10000).pow(1/3)
 
-                visible = collection.map(is_visible) \
-                    .filter(ee.Filter.eq('visible', 1))
-
-                final_mosaic = visible.mosaic()
-
-                vis = {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000}
-                visualized = final_mosaic.select(["B4", "B3", "B2"]).visualize(**vis)
+                visualized = rgb.visualize(min=0, max=1)
 
                 tile_info = ee.data.getMapId({"image": visualized})
                 clean_mapid = tile_info["mapid"].split("/")[-1]
