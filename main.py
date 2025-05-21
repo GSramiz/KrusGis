@@ -96,7 +96,6 @@ def update_sheet(sheets_client):
                     .filterBounds(geometry) \
                     .sort("CLOUDY_PIXEL_PERCENTAGE") \
                     .limit(500) \
-                
                     .map(mask_clouds)
 
                 size = collection.size().getInfo()
