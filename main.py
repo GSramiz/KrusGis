@@ -17,8 +17,8 @@ image = ee.Image("projects/ee-romantik1994/assets/mosaic_Belgorodskaya_2022-05")
 tile_info = ee.data.getMapId({
     "image": image,
     "bands": ["B4", "B3", "B2"],
-    "min": 0,
-    "max": 3000
+    "min": [0, 0, 0],        # ✅ каждый канал отдельно
+    "max": [3000, 3000, 3000]
 })
 
 xyz_url = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{tile_info['mapid']}/tiles/{{z}}/{{x}}/{{y}}"
