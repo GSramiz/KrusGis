@@ -94,25 +94,27 @@ def update_sheet(sheets_client):
                 geometry = get_geometry_from_asset(region)
 
                 collection = (
-                    ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-                    .filterDate(start, end_str)
-                    .filterBounds(geometry)
-                    .map(mask_clouds)
-                )
-
-                # Быстрая проверка наличия снимков через .size().getInfo()
-                if collection.size().getInfo() == 0:
+                ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+                .filterDate(start, end_str)
+                .filterBounds(geometry)
+                .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
+                .map(mask_clouds)
+)
+                
+                # Быстрая проверка наличия снимков через .first()
+                if collection.first().getInfo() is None:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
                 filtered_mosaic = collection.mosaic()
 
+               
                 tile_info = ee.data.getMapId({
-                    "image": filtered_mosaic,
-                    "bands": ["B4", "B3", "B2"],
-                    "min": "0,0,0",
-                    "max": "3000,3000,3000"
-                })
+                "image": filtered_mosaic,
+                "bands": ["B4", "B3", "B2"],
+                "min": "0,0,0",
+                "max": "3000,3000,3000"
+})
 
                 clean_mapid = tile_info["mapid"].split("/")[-1]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
