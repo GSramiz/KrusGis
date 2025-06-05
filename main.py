@@ -11,7 +11,7 @@ SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1oz12JnCKuM05PpHNR1gkNR_tPENa
 SHEET_NAME = "Sentinel-2 Покрытие"
 
 def log_error(context, error):
-    print(f"\nОШИБКА в {context}:")
+    print(f"\ОШИБКА в {context}:")
     print(f"Тип: {type(error).__name__}")
     print(f"Сообщение: {str(error)}")
     traceback.print_exc()
@@ -52,25 +52,18 @@ def month_str_to_number(name):
     }
     return months.get(name.strip().capitalize(), None)
 
-# Кеш геометрий регионов, чтобы не делать повторных запросов в EE
-_region_cache = {}
 def get_geometry_from_asset(region_name):
-    if region_name in _region_cache:
-        return _region_cache[region_name]
     fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
     region = fc.filter(ee.Filter.eq("title", region_name)).first()
     if region is None:
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
-    geom = region.geometry()
-    _region_cache[region_name] = geom
-    return geom
+    return region.geometry()
 
-# Маска облаков без ресемплинга
 def mask_clouds(img):
     scl = img.select("SCL")
-    # Оставляем только «чистые» пиксели: 4 (vegetation), 5 (non-vegetated), 6 (water), 7 (unclassified)
+    # Оставляем только "чистые" пиксели: 4 (vegetation), 5 (non-vegetated), 6 (water), 7 (unclassified)
     allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
-    return img.updateMask(allowed)
+    return img.updateMask(allowed).resample("bilinear")
 
 def update_sheet(sheets_client):
     try:
@@ -86,21 +79,12 @@ def update_sheet(sheets_client):
                 if not region or not date_str:
                     continue
 
-                # Если date_str вдруг list/tuple, склеиваем, иначе приводим к str
-                if isinstance(date_str, (list, tuple)):
-                    date_str = " ".join(date_str)
-                else:
-                    date_str = str(date_str)
-
                 parts = date_str.strip().split()
                 if len(parts) != 2:
                     raise ValueError(f"Неверный формат даты: '{date_str}'")
 
                 month_num = month_str_to_number(parts[0])
                 year = parts[1]
-                if month_num is None:
-                    raise ValueError(f"Неизвестное название месяца: '{parts[0]}'")
-
                 start = f"{year}-{month_num}-01"
                 days = calendar.monthrange(int(year), int(month_num))[1]
                 end_str = f"{year}-{month_num}-{days:02d}"
@@ -110,31 +94,27 @@ def update_sheet(sheets_client):
                 geometry = get_geometry_from_asset(region)
 
                 collection = (
-                    ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-                      .filterDate(start, end_str)
-                      .filterBounds(geometry)
-                      .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
-                      .map(mask_clouds)  # без ресемплинга
-                )
-
-                # Проверка наличия снимков через size()
-                count = collection.size().getInfo()
-                if count == 0:
+                ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+                .filterDate(start, end_str)
+                .filterBounds(geometry)
+                .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
+                .map(mask_clouds)
+)
+                
+                # Быстрая проверка наличия снимков через .first()
+                if collection.first().getInfo() is None:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Делаем мозаику из «чистых» кадров
                 filtered_mosaic = collection.mosaic()
 
-                # Ресемплинг уже к итоговой мозаике (опционально)
-                filtered_mosaic = filtered_mosaic.resample("bilinear")
-
+               
                 tile_info = ee.data.getMapId({
-                    "image": filtered_mosaic,
-                    "bands": ["B4", "B3", "B2"],
-                    "min": [0, 0, 0],
-                    "max": [3000, 3000, 3000]
-                })
+                "image": filtered_mosaic,
+                "bands": ["B4", "B3", "B2"],
+                "min": "0,0,0",
+                "max": "3000,3000,3000"
+})
 
                 clean_mapid = tile_info["mapid"].split("/")[-1]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
