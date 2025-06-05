@@ -11,7 +11,7 @@ SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1oz12JnCKuM05PpHNR1gkNR_tPENa
 SHEET_NAME = "Sentinel-2 Покрытие"
 
 def log_error(context, error):
-    print(f"\nОШИБКА в {context}:")
+    print(f"\ОШИБКА в {context}:")
     print(f"Тип: {type(error).__name__}")
     print(f"Сообщение: {str(error)}")
     traceback.print_exc()
@@ -52,7 +52,7 @@ def month_str_to_number(name):
     }
     return months.get(name.strip().capitalize(), None)
 
-# Кеширование геометрий регионов, чтобы не делать повторных запросов
+# Кеш геометрий регионов, чтобы не делать повторных запросов
 _region_cache = {}
 def get_geometry_from_asset(region_name):
     if region_name in _region_cache:
@@ -69,7 +69,7 @@ def mask_clouds(img):
     scl = img.select("SCL")
     # Оставляем только "чистые" пиксели: 4 (vegetation), 5 (non-vegetated), 6 (water), 7 (unclassified)
     allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
-    return img.updateMask(allowed)  # убрали resample здесь
+    return img.updateMask(allowed)  # убрали resample из этой функции
 
 def update_sheet(sheets_client):
     try:
@@ -91,9 +91,6 @@ def update_sheet(sheets_client):
 
                 month_num = month_str_to_number(parts[0])
                 year = parts[1]
-                if month_num is None:
-                    raise ValueError(f"Неизвестное название месяца: '{parts[0]}'")
-
                 start = f"{year}-{month_num}-01"
                 days = calendar.monthrange(int(year), int(month_num))[1]
                 end_str = f"{year}-{month_num}-{days:02d}"
@@ -104,31 +101,33 @@ def update_sheet(sheets_client):
 
                 collection = (
                     ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-                      .filterDate(start, end_str)
-                      .filterBounds(geometry)
-                      .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
-                      .map(mask_clouds)
+                    .filterDate(start, end_str)
+                    .filterBounds(geometry)
+                    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
+                    .map(mask_clouds)
                 )
 
-                # Проверка наличия снимков через size().getInfo()
+                # Быстрая проверка наличия снимков через size().getInfo()
                 count = collection.size().getInfo()
                 if count == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
+                # Делаем мозаику из «чистых» кадров
                 filtered_mosaic = collection.mosaic()
+
                 # Ресемплинг только один раз после mosaic()
                 filtered_mosaic = filtered_mosaic.resample("bilinear")
 
                 tile_info = ee.data.getMapId({
                     "image": filtered_mosaic,
                     "bands": ["B4", "B3", "B2"],
-                    "min": [0, 0, 0],
-                    "max": [3000, 3000, 3000]
+                    "min": "0,0,0",
+                    "max": "3000,3000,3000"
                 })
 
-                mapid = tile_info["mapid"]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
+                clean_mapid = tile_info["mapid"].split("/")[-1]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
 
