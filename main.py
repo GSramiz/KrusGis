@@ -52,7 +52,7 @@ def month_str_to_number(name):
     }
     return months.get(name.strip().capitalize(), None)
 
-# Кеш геометрий регионов, чтобы не делать повторных запросов
+# Кеширование геометрий регионов, чтобы не делать повторных запросов
 _region_cache = {}
 def get_geometry_from_asset(region_name):
     if region_name in _region_cache:
@@ -65,11 +65,11 @@ def get_geometry_from_asset(region_name):
     _region_cache[region_name] = geom
     return geom
 
-# Маска облаков: теперь без ресемплинга внутри
 def mask_clouds(img):
     scl = img.select("SCL")
+    # Оставляем только "чистые" пиксели: 4 (vegetation), 5 (non-vegetated), 6 (water), 7 (unclassified)
     allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
-    return img.updateMask(allowed)
+    return img.updateMask(allowed)  # убрали resample здесь
 
 def update_sheet(sheets_client):
     try:
@@ -81,35 +81,24 @@ def update_sheet(sheets_client):
 
         for row_idx, row in enumerate(data[1:], start=2):
             try:
-                region = row[0]
-                raw_date = row[1]
-
-                if not region or not raw_date:
+                region, date_str = row[:2]
+                if not region or not date_str:
                     continue
 
-                # Если raw_date оказался списком (list/tuple), берем первый элемент
-                if isinstance(raw_date, (list, tuple)):
-                    date_str = raw_date[0]
-                else:
-                    date_str = raw_date
-
-                # Приводим к строке и разбиваем
-                date_str = str(date_str).strip()
-                parts = date_str.split()
+                parts = date_str.strip().split()
                 if len(parts) != 2:
                     raise ValueError(f"Неверный формат даты: '{date_str}'")
 
-                month_part = parts[0]
+                month_num = month_str_to_number(parts[0])
                 year = parts[1]
-                month_num = month_str_to_number(month_part)
                 if month_num is None:
-                    raise ValueError(f"Неизвестное название месяца: '{month_part}'")
+                    raise ValueError(f"Неизвестное название месяца: '{parts[0]}'")
 
                 start = f"{year}-{month_num}-01"
                 days = calendar.monthrange(int(year), int(month_num))[1]
                 end_str = f"{year}-{month_num}-{days:02d}"
 
-                print(f"\n{region} — {start} - {end_str}")
+                print(f"\n {region} — {start} - {end_str}")
 
                 geometry = get_geometry_from_asset(region)
 
