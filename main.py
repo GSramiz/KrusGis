@@ -170,7 +170,7 @@ def update_sheet(sheets_client):
                 collection = s2_sr \
                     .filterDate(start, end_str) \
                     .filterBounds(geometry) \
-                    .filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE', 80)) \
+                    .filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE', 40)) \
                     .map(lambda img: 
                          img.updateMask(
                             cloud_prob_col.filter(ee.Filter.eq('system:index', img.get('system:index'))).first()
@@ -199,13 +199,14 @@ def update_sheet(sheets_client):
                 mosaic = collection.mosaic().resample('bilinear').clip(geometry)
 
                 # Исправлено: используем 'mosaic', а не 'filtered_mosaic' (не определена переменная)
-                tile_info = ee.data.getMapId({
-                    "image": mosaic,
-                    "bands": ["B4", "B3", "B2"],
-                    "min": 0,
-                    "max": 3000
-                })
-
+                tile_info = ee.data.getMapId( mosaic,
+    {
+        "bands": ["B4", "B3", "B2"],
+        "min": [0, 0, 0],
+        "max": [3000, 3000, 3000]
+    }
+)
+                
                 mapid = tile_info["mapid"]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
                 worksheet.update_cell(row_idx, 3, xyz)
