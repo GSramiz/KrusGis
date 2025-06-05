@@ -50,9 +50,10 @@ def month_str_to_number(name):
         "Май": "05", "Июнь": "06", "Июль": "07", "Август": "08",
         "Сентябрь": "09", "Октябрь": "10", "Ноябрь": "11", "Декабрь": "12"
     }
+    # Приводим к Единому Регистру
     return months.get(name.strip().capitalize(), None)
 
-# Подгружаем геометрию региона из ассета один раз и кешируем в словаре:
+# Кеш геометрий регионов в память, чтобы не делать повторных запросов в Earth Engine
 _region_cache = {}
 def get_geometry_from_asset(region_name):
     if region_name in _region_cache:
@@ -65,10 +66,9 @@ def get_geometry_from_asset(region_name):
     _region_cache[region_name] = geom
     return geom
 
-# Убираем ресемплинг из map, применим его только к готовому мозаичному изображению
+# Очищаем облака (без ресемплинга): оставляем только «чистые» пиксели по SCL
 def mask_clouds_simple(img):
     scl = img.select("SCL")
-    # Оставляем «чистые» пиксели: 4 (vegetation), 5 (non-vegetated), 6 (water), 7 (unclassified)
     mask = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
     return img.updateMask(mask)
 
@@ -80,24 +80,39 @@ def update_sheet(sheets_client):
         worksheet = spreadsheet.worksheet(SHEET_NAME)
         data = worksheet.get_all_values()
 
-        # Собираем список batch-операций по Google Sheets
+        # Собираем batch‐список изменений для Google Sheets
         cell_updates = []
 
-        # Проходим по строкам, начиная с 2-й (первую пропускаем — заголовки)
+        # Проходим по всем строкам, начиная со 2-й (индекс 1), поскольку первая—заголовки
         for row_idx, row in enumerate(data[1:], start=2):
             try:
-                region, date_str = row[:2]
-                if not region or not date_str:
+                # Первая ячейка = название региона
+                region = row[0]
+                if not region:
                     continue
+
+                # Вторая ячейка (индекс 1) = дата в виде «Месяц Год»
+                raw_date = row[1]
+                if not raw_date:
+                    # Если ячейка пуста, просто пропускаем
+                    continue
+
+                # «Страхуемся» на случай, если gspread вернул list вместо строки
+                if isinstance(raw_date, (list, tuple)):
+                    date_str = " ".join(raw_date)
+                else:
+                    date_str = str(raw_date)
 
                 parts = date_str.strip().split()
                 if len(parts) != 2:
-                    raise ValueError(f"Неверный формат даты: '{date_str}'")
+                    raise ValueError(f"Неверный формат даты (ожидается «Месяц Год»): '{date_str}'")
 
-                month_num = month_str_to_number(parts[0])
-                year = parts[1]
+                month_name, year = parts[0], parts[1]
+                month_num = month_str_to_number(month_name)
                 if month_num is None:
-                    raise ValueError(f"Неизвестное название месяца: '{parts[0]}'")
+                    raise ValueError(f"Неизвестное название месяца: '{month_name}'")
+
+                # Собираем дату начала (1-го числа) и конца (последний день месяца)
                 start = f"{year}-{month_num}-01"
                 days = calendar.monthrange(int(year), int(month_num))[1]
                 end_str = f"{year}-{month_num}-{days:02d}"
@@ -111,29 +126,26 @@ def update_sheet(sheets_client):
                     .filterDate(start, end_str)
                     .filterBounds(geometry)
                     .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
-                    .map(mask_clouds_simple)  # без ресемплинга!
+                    .map(mask_clouds_simple)  # только маска по SCL, без ресемплинга
                 )
 
-                # Быстрая проверка: берем размер коллекции
+                # Проверяем, есть ли вообще кадры:
                 count = collection.size().getInfo()
                 if count == 0:
-                    # Если нет снимков — помечаем «Нет снимков»
                     cell_updates.append({
                         'range': f"{SHEET_NAME}!C{row_idx}",
                         'values': [["Нет снимков"]]
                     })
                     continue
 
-                # Строим мозаичное изображение из «очищенных» кадров
+                # Делаем мозаичное изображение из «чистых» кадров
                 mosaic = collection.mosaic()
 
-                # Теперь применяем ресемплинг только к готовому мозаичному слою,
-                # если он вообще нам нужен. Во многих случаях
-                # GEE отдаёт тайлы без ресемплинга,
-                # но для «плавности» визуализации можно добавить:
+                # Опционально: применяем ресемплинг уже к итоговой мозаике
+                # (многие обходятся без этого; можно закомментировать, если не критично)
                 mosaic = mosaic.resample("bilinear")
 
-                # Строим mapid (карта готова к показу)
+                # Получаем MapID для визуализации (B4,B3,B2, диапазон 0–3000)
                 tile_info = ee.data.getMapId({
                     "image": mosaic,
                     "bands": ["B4", "B3", "B2"],
@@ -149,7 +161,7 @@ def update_sheet(sheets_client):
                 })
 
             except Exception as e:
-                # Логируем и отдаем короткую часть ошибки в ячейку
+                # Если что‐то пошло не так — логируем и пишем короткую ошибку в ячейку
                 log_error(f"Строка {row_idx}", e)
                 short_err = f"Ошибка: {str(e)[:100]}"
                 cell_updates.append({
@@ -157,7 +169,7 @@ def update_sheet(sheets_client):
                     'values': [[short_err]]
                 })
 
-        # Выполняем batch_update разом
+        # Если есть накопленные обновления — отправляем одним batch‐запросом
         if cell_updates:
             body = {
                 'valueInputOption': "USER_ENTERED",
