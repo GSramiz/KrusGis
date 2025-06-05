@@ -11,7 +11,7 @@ SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1oz12JnCKuM05PpHNR1gkNR_tPENa
 SHEET_NAME = "Sentinel-2 Покрытие"
 
 def log_error(context, error):
-    print(f"\nОШИБКА в {context}:")
+    print(f"\ОШИБКА в {context}:")
     print(f"Тип: {type(error).__name__}")
     print(f"Сообщение: {str(error)}")
     traceback.print_exc()
@@ -65,11 +65,11 @@ def get_geometry_from_asset(region_name):
     _region_cache[region_name] = geom
     return geom
 
-# Маска облаков: без ресемплинга внутри
 def mask_clouds(img):
     scl = img.select("SCL")
+    # Оставляем только «чистые» пиксели: 4 (vegetation), 5 (non-vegetated), 6 (water), 7 (unclassified)
     allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
-    return img.updateMask(allowed)
+    return img.updateMask(allowed)  # убрали resample внутри
 
 def update_sheet(sheets_client):
     try:
@@ -81,7 +81,6 @@ def update_sheet(sheets_client):
 
         for row_idx, row in enumerate(data[1:], start=2):
             try:
-                # Разбор точно как в оригинале:
                 region, date_str = row[:2]
                 if not region or not date_str:
                     continue
@@ -111,23 +110,24 @@ def update_sheet(sheets_client):
                       .map(mask_clouds)
                 )
 
-                # Проверка наличия снимков через size()
+                # Быстрая проверка наличия снимков через size().getInfo()
                 count = collection.size().getInfo()
                 if count == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Делаем мозаику из всех «чистых» кадров
+                # Делаем мозаику из «чистых» кадров
                 filtered_mosaic = collection.mosaic()
 
                 # Единоразовый ресемплинг после mosaic()
                 filtered_mosaic = filtered_mosaic.resample("bilinear")
 
+                # ПЕРЕДАЕМ в getMapId() именно числовые массивы для min/max
                 tile_info = ee.data.getMapId({
                     "image": filtered_mosaic,
                     "bands": ["B4", "B3", "B2"],
-                    "min": "0,0,0",
-                    "max": "3000,3000,3000"
+                    "min": [0, 0, 0],
+                    "max": [3000, 3000, 3000]
                 })
 
                 clean_mapid = tile_info["mapid"].split("/")[-1]
