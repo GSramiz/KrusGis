@@ -59,6 +59,16 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
+def mask_clouds(img):
+    scl = img.select("SCL")
+    allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
+    return img.updateMask(allowed).resample("bicubic").copyProperties(img)
+
+def intersects_geometry(geometry):
+    def inner(img):
+        return img.set("intersects", img.geometry().intersects(geometry, ee.ErrorMargin(1)))
+    return inner
+
 def update_sheet(sheets_client):
     try:
         print("Обновление таблицы")
@@ -66,8 +76,6 @@ def update_sheet(sheets_client):
         spreadsheet = sheets_client.open_by_key(SPREADSHEET_ID)
         worksheet = spreadsheet.worksheet(SHEET_NAME)
         data = worksheet.get_all_values()
-
-        geometry_cache = {}
 
         for row_idx, row in enumerate(data[1:], start=2):
             try:
@@ -85,27 +93,28 @@ def update_sheet(sheets_client):
                 days = calendar.monthrange(int(year), int(month_num))[1]
                 end_str = f"{year}-{month_num}-{days:02d}"
 
-                print(f"\n{region} — {start} - {end_str}")
+                print(f"\n {region} — {start} - {end_str}")
 
-                # Кэш геометрии
-                if region in geometry_cache:
-                    geometry = geometry_cache[region]
-                else:
-                    geometry = get_geometry_from_asset(region)
-                    geometry_cache[region] = geometry
+                geometry = get_geometry_from_asset(region)
 
-                collection = (
+                raw_collection = (
                     ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
                     .filterDate(start, end_str)
                     .filterBounds(geometry)
                     .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
                 )
 
-                if collection.size().getInfo() == 0:
+                # Фильтруем по пересечению геометрии
+                intersected = raw_collection.map(intersects_geometry(geometry)) \
+                                            .filter(ee.Filter.eq("intersects", True))
+
+                collection = intersected.map(mask_clouds)
+
+                if collection.first().getInfo() is None:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                filtered_mosaic = collection.mosaic().resample("bilinear")
+                filtered_mosaic = collection.mosaic()
 
                 tile_info = ee.data.getMapId({
                     "image": filtered_mosaic,
@@ -114,8 +123,8 @@ def update_sheet(sheets_client):
                     "max": "3000,3000,3000"
                 })
 
-                mapid = tile_info["mapid"]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
+                clean_mapid = tile_info["mapid"].split("/")[-1]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
 
