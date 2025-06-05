@@ -7,6 +7,17 @@ import calendar
 from collections import defaultdict
 from oauth2client.service_account import ServiceAccountCredentials
 
+# Русские названия месяцев
+month_names_ru = {
+    1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
+    5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
+    9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь"
+}
+
+def month_str_to_number(name):
+    months = {v: f"{k:02d}" for k, v in month_names_ru.items()}
+    return months.get(name.strip().capitalize(), None)
+
 # Конфигурация
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1oz12JnCKuM05PpHNR1gkNR_tPENazabwOGkWWeAc2hY")
 SHEET_NAME = "Sentinel-2 Покрытие"
@@ -41,14 +52,6 @@ def initialize_services():
     except Exception as e:
         log_error("initialize_services", e)
         raise
-
-def month_str_to_number(name):
-    months = {
-        "Январь": "01", "Февраль": "02", "Март": "03", "Апрель": "04",
-        "Май": "05", "Июнь": "06", "Июль": "07", "Август": "08",
-        "Сентябрь": "09", "Октябрь": "10", "Ноябрь": "11", "Декабрь": "12"
-    }
-    return months.get(name.strip().capitalize(), None)
 
 def get_geometry_from_asset(region_name):
     fc = ee.FeatureCollection("projects/ee-romantik1994/assets/region")
@@ -96,7 +99,7 @@ def ensure_month_coverage(sheets_client):
     for (region, year), months in grouped.items():
         missing = REQUIRED_MONTHS - months
         for month in missing:
-            date_label = f"{calendar.month_name[int(month)]} {year}"
+            date_label = f"{month_names_ru[int(month)]} {year}"
             full_data.append((region, year, month, [region, date_label, "", "⛔ Нет снимков"]))
 
     all_regions = sorted({r[0].strip() for r in rows if r[0].strip()})
@@ -104,7 +107,7 @@ def ensure_month_coverage(sheets_client):
         for year in YEARS:
             if (region, year) not in grouped:
                 for month in REQUIRED_MONTHS:
-                    date_label = f"{calendar.month_name[int(month)]} {year}"
+                    date_label = f"{month_names_ru[int(month)]} {year}"
                     full_data.append((region, year, month, [region, date_label, "", "⛔ Нет снимков"]))
 
     unique_keys = set()
@@ -127,11 +130,8 @@ def ensure_month_coverage(sheets_client):
         return (region, year, month_num)
 
     cleaned.sort(key=sort_key)
-
-    # 🛠️ ВАЖНО: переносим очистку и обновление сюда
     worksheet.clear()
     worksheet.update([headers] + cleaned)
-
     print("✅ Проверка и дополнение по месяцам завершена.")
 
 def update_sheet(sheets_client):
