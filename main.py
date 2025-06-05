@@ -131,13 +131,13 @@ def ensure_month_coverage(sheets_client):
         return (region, year, month_num)
 
     cleaned.sort(key=sort_key)
+    
+# Обновляем таблицу
+worksheet.clear()
+worksheet.update([headers] + cleaned)
 
-    # Обновляем таблицу
-        worksheet.clear()
-    worksheet.update([headers] + cleaned)
-
-    print("✅ Проверка и дополнение по месяцам завершена.")
-
+print("✅ Проверка и дополнение по месяцам завершена.")
+    
 def update_sheet(sheets_client):
     try:
         print("Обновление таблицы")
