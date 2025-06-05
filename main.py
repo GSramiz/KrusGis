@@ -93,14 +93,12 @@ def ensure_month_coverage(sheets_client):
         grouped[(region, year)].add(month_num)
         full_data.append((region, year, month_num, row))
 
-    # Добавим недостающие строки в табличке
     for (region, year), months in grouped.items():
         missing = REQUIRED_MONTHS - months
         for month in missing:
             date_label = f"{calendar.month_name[int(month)]} {year}"
             full_data.append((region, year, month, [region, date_label, "", "⛔ Нет снимков"]))
 
-    # Также добавим регионы без данных вообще
     all_regions = sorted({r[0].strip() for r in rows if r[0].strip()})
     for region in all_regions:
         for year in YEARS:
@@ -109,7 +107,6 @@ def ensure_month_coverage(sheets_client):
                     date_label = f"{calendar.month_name[int(month)]} {year}"
                     full_data.append((region, year, month, [region, date_label, "", "⛔ Нет снимков"]))
 
-    # Удалим дубли
     unique_keys = set()
     cleaned = []
     for entry in full_data:
@@ -118,7 +115,6 @@ def ensure_month_coverage(sheets_client):
             unique_keys.add(key)
             cleaned.append(entry[3])
 
-    # Сортировка: по региону, по году, по месяцу
     def sort_key(r):
         region = r[0]
         parts = r[1].split()
@@ -131,17 +127,16 @@ def ensure_month_coverage(sheets_client):
         return (region, year, month_num)
 
     cleaned.sort(key=sort_key)
-    
-# Обновляем таблицу
-worksheet.clear()
-worksheet.update([headers] + cleaned)
 
-print("✅ Проверка и дополнение по месяцам завершена.")
-    
+    # 🛠️ ВАЖНО: переносим очистку и обновление сюда
+    worksheet.clear()
+    worksheet.update([headers] + cleaned)
+
+    print("✅ Проверка и дополнение по месяцам завершена.")
+
 def update_sheet(sheets_client):
     try:
         print("Обновление таблицы")
-
         spreadsheet = sheets_client.open_by_key(SPREADSHEET_ID)
         worksheet = spreadsheet.worksheet(SHEET_NAME)
         data = worksheet.get_all_values()
