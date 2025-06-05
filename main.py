@@ -52,7 +52,7 @@ def month_str_to_number(name):
     }
     return months.get(name.strip().capitalize(), None)
 
-# Кеш геометрий регионов (чтобы не скачивать несколько раз одну и ту же геометрию)
+# Кеш геометрий регионов, чтобы не делать повторных запросов в EE
 _region_cache = {}
 def get_geometry_from_asset(region_name):
     if region_name in _region_cache:
@@ -65,33 +65,28 @@ def get_geometry_from_asset(region_name):
     _region_cache[region_name] = geom
     return geom
 
-# Маска облаков (без ресемплинга)
+# Маска облаков без ресемплинга
 def mask_clouds(img):
     scl = img.select("SCL")
-    # Оставляем только «чистые» пиксели: 4,5,6,7
+    # Оставляем только «чистые» пиксели: 4 (vegetation), 5 (non-vegetated), 6 (water), 7 (unclassified)
     allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
     return img.updateMask(allowed)
 
 def update_sheet(sheets_client):
     try:
-        print("Обновление таблицы...")
+        print("Обновление таблицы")
 
         spreadsheet = sheets_client.open_by_key(SPREADSHEET_ID)
         worksheet = spreadsheet.worksheet(SHEET_NAME)
         data = worksheet.get_all_values()
 
-        # Собираем batch-список изменений
-        cell_updates = []
-
-        # Проходим по строкам, начиная со 2-й (заголовки в 1-й)
         for row_idx, row in enumerate(data[1:], start=2):
             try:
-                # В точности как в референсе:
                 region, date_str = row[:2]
                 if not region or not date_str:
                     continue
 
-                # Если date_str неожиданно list или tuple, склеиваем в строку
+                # Если date_str вдруг list/tuple, склеиваем, иначе приводим к str
                 if isinstance(date_str, (list, tuple)):
                     date_str = " ".join(date_str)
                 else:
@@ -116,22 +111,19 @@ def update_sheet(sheets_client):
 
                 collection = (
                     ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-                    .filterDate(start, end_str)
-                    .filterBounds(geometry)
-                    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
-                    .map(mask_clouds)  # маска облаков, без ресемплинга
+                      .filterDate(start, end_str)
+                      .filterBounds(geometry)
+                      .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
+                      .map(mask_clouds)  # без ресемплинга
                 )
 
-                # Быстрая проверка наличия снимков через size()
+                # Проверка наличия снимков через size()
                 count = collection.size().getInfo()
                 if count == 0:
-                    cell_updates.append({
-                        'range': f"{SHEET_NAME}!C{row_idx}",
-                        'values': [["Нет снимков"]]
-                    })
+                    worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Собираем мозаику из «чистых» кадров
+                # Делаем мозаику из «чистых» кадров
                 filtered_mosaic = collection.mosaic()
 
                 # Ресемплинг уже к итоговой мозаике (опционально)
@@ -147,28 +139,11 @@ def update_sheet(sheets_client):
                 clean_mapid = tile_info["mapid"].split("/")[-1]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
-                cell_updates.append({
-                    'range': f"{SHEET_NAME}!C{row_idx}",
-                    'values': [[xyz]]
-                })
+                worksheet.update_cell(row_idx, 3, xyz)
 
             except Exception as e:
                 log_error(f"Строка {row_idx}", e)
-                short_err = f"Ошибка: {str(e)[:100]}"
-                cell_updates.append({
-                    'range': f"{SHEET_NAME}!C{row_idx}",
-                    'values': [[short_err]]
-                })
-
-        # Отправляем все обновления одним batch_update
-        if cell_updates:
-            body = {
-                'valueInputOption': "USER_ENTERED",
-                'data': cell_updates
-            }
-            worksheet.spreadsheet.batch_update(body)
-
-        print("Обновление завершено.")
+                worksheet.update_cell(row_idx, 3, f"Ошибка: {str(e)[:100]}")
 
     except Exception as e:
         log_error("update_sheet", e)
