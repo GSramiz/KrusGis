@@ -133,10 +133,8 @@ def ensure_month_coverage(sheets_client):
     cleaned.sort(key=sort_key)
 
     # Обновляем таблицу
-    worksheet.clear()
-    worksheet.append_row(headers)
-    for row in cleaned:
-        worksheet.append_row(row)
+        worksheet.clear()
+    worksheet.update([headers] + cleaned)
 
     print("✅ Проверка и дополнение по месяцам завершена.")
 
