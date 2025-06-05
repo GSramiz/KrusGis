@@ -52,7 +52,7 @@ def month_str_to_number(name):
     }
     return months.get(name.strip().capitalize(), None)
 
-# Кеширование геометрий регионов для ускорения
+# Кеш геометрий регионов, чтобы не делать повторных запросов
 _region_cache = {}
 def get_geometry_from_asset(region_name):
     if region_name in _region_cache:
@@ -65,11 +65,11 @@ def get_geometry_from_asset(region_name):
     _region_cache[region_name] = geom
     return geom
 
-# Маска облаков: теперь без ресемплинга внутри
 def mask_clouds(img):
     scl = img.select("SCL")
+    # Оставляем только «чистые» пиксели: 4 (vegetation), 5 (non-vegetated), 6 (water), 7 (unclassified)
     allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
-    return img.updateMask(allowed)
+    return img.updateMask(allowed)  # без ресемплинга здесь
 
 def update_sheet(sheets_client):
     try:
@@ -110,7 +110,7 @@ def update_sheet(sheets_client):
                       .map(mask_clouds)
                 )
 
-                # Проверка наличия снимков
+                # Проверка наличия снимков через size().getInfo()
                 count = collection.size().getInfo()
                 if count == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
@@ -122,16 +122,16 @@ def update_sheet(sheets_client):
                 # Единоразовый ресемплинг после mosaic()
                 filtered_mosaic = filtered_mosaic.resample("bilinear")
 
-                # Используем те же «min» и «max» в формате строк, как в исходном примере
                 tile_info = ee.data.getMapId({
                     "image": filtered_mosaic,
                     "bands": ["B4", "B3", "B2"],
-                    "min": "0,0,0",
-                    "max": "3000,3000,3000"
+                    "min": [0, 0, 0],           # числовые массивы вместо строк
+                    "max": [3000, 3000, 3000]
                 })
 
-                mapid = tile_info["mapid"]
-                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
+                # «Чистый» mapid, как было в оригинале
+                clean_mapid = tile_info["mapid"].split("/")[-1]
+                xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
                 worksheet.update_cell(row_idx, 3, xyz)
 
