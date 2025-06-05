@@ -60,10 +60,12 @@ def get_geometry_from_asset(region_name):
         raise ValueError(f"Регион '{region_name}' не найден в ассете")
     return region.geometry()
 
+# Новая маска облаков через коллекцию облачности
 def mask_clouds(img):
-    scl = img.select("SCL")
-    allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
-    return img.updateMask(allowed).resample("bilinear")
+    cloud_prob = ee.ImageCollection('COPERNICUS/S2_CLOUD_PROBABILITY') \
+        .filter(ee.Filter.eq('system:index', img.get('system:index'))).first()
+    cloud_mask = cloud_prob.lt(40).rename('cloudmask')
+    return img.updateMask(cloud_mask)
 
 def ensure_month_coverage(sheets_client):
     REQUIRED_MONTHS = {'04', '05', '06', '07', '08', '09', '10'}
@@ -141,6 +143,9 @@ def update_sheet(sheets_client):
         worksheet = spreadsheet.worksheet(SHEET_NAME)
         data = worksheet.get_all_values()
 
+        cloud_prob_col = ee.ImageCollection('COPERNICUS/S2_CLOUD_PROBABILITY')
+        s2_sr = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+
         for row_idx, row in enumerate(data[1:], start=2):
             try:
                 region, date_str = row[:2]
@@ -161,28 +166,47 @@ def update_sheet(sheets_client):
 
                 geometry = get_geometry_from_asset(region)
 
-                collection = (
-                    ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-                    .filterDate(start, end_str)
-                    .filterBounds(geometry)
-                    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 40))
-                    .map(mask_clouds)
-                )
+                # Фильтрация коллекции Sentinel-2 SR с маской облаков
+                collection = s2_sr \
+                    .filterDate(start, end_str) \
+                    .filterBounds(geometry) \
+                    .filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE', 80)) \
+                    .map(lambda img: 
+                         img.updateMask(
+                            cloud_prob_col.filter(ee.Filter.eq('system:index', img.get('system:index'))).first()
+                            .lt(40)
+                         )
+                    )
 
-                if collection.first().getInfo() is None:
+                # Вычисляем валидные пиксели в регионе по одному из каналов (например, B4)
+                def add_valid_pixel_count(img):
+                    stats = img.select('B4').reduceRegion(
+                        reducer=ee.Reducer.count(),
+                        geometry=geometry,
+                        scale=20,
+                        maxPixels=1e9
+                    )
+                    count = ee.Number(stats.get('B4'))
+                    return img.set('valid_pixel_count', count)
+
+                collection = collection.map(add_valid_pixel_count)
+                collection = collection.filter(ee.Filter.gt('valid_pixel_count', 0))
+
+                if collection.size().getInfo() == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                filtered_mosaic = collection.mosaic()
+                mosaic = collection.mosaic().resample('bilinear').clip(geometry)
 
+                # Исправлено: используем 'mosaic', а не 'filtered_mosaic' (не определена переменная)
                 tile_info = ee.data.getMapId({
-                    "image": filtered_mosaic,
+                    "image": mosaic,
                     "bands": ["B4", "B3", "B2"],
-                    "min": "0,0,0",
-                    "max": "3000,3000,3000"
+                    "min": 0,
+                    "max": 3000
                 })
 
-                mapid = tile_info["mapid"].split("/")[-1]
+                mapid = tile_info["mapid"]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{mapid}/tiles/{{z}}/{{x}}/{{y}}"
                 worksheet.update_cell(row_idx, 3, xyz)
 
