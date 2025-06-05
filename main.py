@@ -72,8 +72,6 @@ def update_sheet(sheets_client):
         worksheet = spreadsheet.worksheet(SHEET_NAME)
         data = worksheet.get_all_values()
 
-        geometry_cache = {}
-
         for row_idx, row in enumerate(data[1:], start=2):
             try:
                 region, date_str = row[:2]
@@ -92,11 +90,7 @@ def update_sheet(sheets_client):
 
                 print(f"\n {region} — {start} - {end_str}")
 
-                if region in geometry_cache:
-                    geometry = geometry_cache[region]
-                else:
-                    geometry = get_geometry_from_asset(region)
-                    geometry_cache[region] = geometry
+                geometry = get_geometry_from_asset(region)
 
                 collection = (
                     ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
@@ -110,13 +104,11 @@ def update_sheet(sheets_client):
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                filtered_mosaic = collection.mosaic()
+                mosaic = collection.mosaic()
 
                 tile_info = ee.data.getMapId({
-                    "image": filtered_mosaic,
-                    "bands": ["B4", "B3", "B2"],
-                    "min": "0,0,0",
-                    "max": "3000,3000,3000"
+                    "image": mosaic,
+                    "bands": ["B4", "B3", "B2"]
                 })
 
                 clean_mapid = tile_info["mapid"].split("/")[-1]
