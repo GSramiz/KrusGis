@@ -61,6 +61,7 @@ def get_geometry_from_asset(region_name):
 
 def mask_clouds(img):
     scl = img.select("SCL")
+    # Оставляем только "чистые" пиксели: 4 (vegetation), 5 (non-vegetated), 6 (water), 7 (unclassified)
     allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
     return img.updateMask(allowed).resample("bilinear")
 
@@ -93,23 +94,27 @@ def update_sheet(sheets_client):
                 geometry = get_geometry_from_asset(region)
 
                 collection = (
-                    ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-                    .filterDate(start, end_str)
-                    .filterBounds(geometry)
-                    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
-                    .map(mask_clouds)
-                )
-
+                ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+                .filterDate(start, end_str)
+                .filterBounds(geometry)
+                .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
+                .map(mask_clouds)
+)
+                
+                # Быстрая проверка наличия снимков через .first()
                 if collection.first().getInfo() is None:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                mosaic = collection.mosaic()
+                filtered_mosaic = collection.mosaic()
 
+               
                 tile_info = ee.data.getMapId({
-                    "image": mosaic,
-                    "bands": ["B4", "B3", "B2"]
-                })
+                "image": filtered_mosaic,
+                "bands": ["B4", "B3", "B2"],
+                "min": "0,0,0",
+                "max": "3000,3000,3000"
+})
 
                 clean_mapid = tile_info["mapid"].split("/")[-1]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
