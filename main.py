@@ -65,11 +65,11 @@ def get_geometry_from_asset(region_name):
     _region_cache[region_name] = geom
     return geom
 
+# Маска облаков: без ресемплинга внутри
 def mask_clouds(img):
     scl = img.select("SCL")
-    # Оставляем только «чистые» пиксели: 4 (vegetation), 5 (non-vegetated), 6 (water), 7 (unclassified)
     allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
-    return img.updateMask(allowed)  # без ресемплинга здесь
+    return img.updateMask(allowed)
 
 def update_sheet(sheets_client):
     try:
@@ -81,6 +81,7 @@ def update_sheet(sheets_client):
 
         for row_idx, row in enumerate(data[1:], start=2):
             try:
+                # Разбор точно как в оригинале:
                 region, date_str = row[:2]
                 if not region or not date_str:
                     continue
@@ -110,13 +111,13 @@ def update_sheet(sheets_client):
                       .map(mask_clouds)
                 )
 
-                # Проверка наличия снимков через size().getInfo()
+                # Проверка наличия снимков через size()
                 count = collection.size().getInfo()
                 if count == 0:
                     worksheet.update_cell(row_idx, 3, "Нет снимков")
                     continue
 
-                # Собираем мозаику из всех «чистых» кадров
+                # Делаем мозаику из всех «чистых» кадров
                 filtered_mosaic = collection.mosaic()
 
                 # Единоразовый ресемплинг после mosaic()
@@ -125,11 +126,10 @@ def update_sheet(sheets_client):
                 tile_info = ee.data.getMapId({
                     "image": filtered_mosaic,
                     "bands": ["B4", "B3", "B2"],
-                    "min": [0, 0, 0],           # числовые массивы вместо строк
-                    "max": [3000, 3000, 3000]
+                    "min": "0,0,0",
+                    "max": "3000,3000,3000"
                 })
 
-                # «Чистый» mapid, как было в оригинале
                 clean_mapid = tile_info["mapid"].split("/")[-1]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
