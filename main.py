@@ -50,10 +50,9 @@ def month_str_to_number(name):
         "Май": "05", "Июнь": "06", "Июль": "07", "Август": "08",
         "Сентябрь": "09", "Октябрь": "10", "Ноябрь": "11", "Декабрь": "12"
     }
-    # Приводим к Единому Регистру
     return months.get(name.strip().capitalize(), None)
 
-# Кеш геометрий регионов в память, чтобы не делать повторных запросов в Earth Engine
+# Кеш геометрий регионов (чтобы не скачивать несколько раз одну и ту же геометрию)
 _region_cache = {}
 def get_geometry_from_asset(region_name):
     if region_name in _region_cache:
@@ -66,11 +65,12 @@ def get_geometry_from_asset(region_name):
     _region_cache[region_name] = geom
     return geom
 
-# Очищаем облака (без ресемплинга): оставляем только «чистые» пиксели по SCL
-def mask_clouds_simple(img):
+# Маска облаков (без ресемплинга)
+def mask_clouds(img):
     scl = img.select("SCL")
-    mask = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
-    return img.updateMask(mask)
+    # Оставляем только «чистые» пиксели: 4,5,6,7
+    allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
+    return img.updateMask(allowed)
 
 def update_sheet(sheets_client):
     try:
@@ -80,44 +80,37 @@ def update_sheet(sheets_client):
         worksheet = spreadsheet.worksheet(SHEET_NAME)
         data = worksheet.get_all_values()
 
-        # Собираем batch‐список изменений для Google Sheets
+        # Собираем batch-список изменений
         cell_updates = []
 
-        # Проходим по всем строкам, начиная со 2-й (индекс 1), поскольку первая—заголовки
+        # Проходим по строкам, начиная со 2-й (заголовки в 1-й)
         for row_idx, row in enumerate(data[1:], start=2):
             try:
-                # Первая ячейка = название региона
-                region = row[0]
-                if not region:
+                # В точности как в референсе:
+                region, date_str = row[:2]
+                if not region or not date_str:
                     continue
 
-                # Вторая ячейка (индекс 1) = дата в виде «Месяц Год»
-                raw_date = row[1]
-                if not raw_date:
-                    # Если ячейка пуста, просто пропускаем
-                    continue
-
-                # «Страхуемся» на случай, если gspread вернул list вместо строки
-                if isinstance(raw_date, (list, tuple)):
-                    date_str = " ".join(raw_date)
+                # Если date_str неожиданно list или tuple, склеиваем в строку
+                if isinstance(date_str, (list, tuple)):
+                    date_str = " ".join(date_str)
                 else:
-                    date_str = str(raw_date)
+                    date_str = str(date_str)
 
                 parts = date_str.strip().split()
                 if len(parts) != 2:
-                    raise ValueError(f"Неверный формат даты (ожидается «Месяц Год»): '{date_str}'")
+                    raise ValueError(f"Неверный формат даты: '{date_str}'")
 
-                month_name, year = parts[0], parts[1]
-                month_num = month_str_to_number(month_name)
+                month_num = month_str_to_number(parts[0])
+                year = parts[1]
                 if month_num is None:
-                    raise ValueError(f"Неизвестное название месяца: '{month_name}'")
+                    raise ValueError(f"Неизвестное название месяца: '{parts[0]}'")
 
-                # Собираем дату начала (1-го числа) и конца (последний день месяца)
                 start = f"{year}-{month_num}-01"
                 days = calendar.monthrange(int(year), int(month_num))[1]
                 end_str = f"{year}-{month_num}-{days:02d}"
 
-                print(f"\nОбрабатываем {region} — период {start} - {end_str}")
+                print(f"\n {region} — {start} - {end_str}")
 
                 geometry = get_geometry_from_asset(region)
 
@@ -126,10 +119,10 @@ def update_sheet(sheets_client):
                     .filterDate(start, end_str)
                     .filterBounds(geometry)
                     .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
-                    .map(mask_clouds_simple)  # только маска по SCL, без ресемплинга
+                    .map(mask_clouds)  # маска облаков, без ресемплинга
                 )
 
-                # Проверяем, есть ли вообще кадры:
+                # Быстрая проверка наличия снимков через size()
                 count = collection.size().getInfo()
                 if count == 0:
                     cell_updates.append({
@@ -138,20 +131,19 @@ def update_sheet(sheets_client):
                     })
                     continue
 
-                # Делаем мозаичное изображение из «чистых» кадров
-                mosaic = collection.mosaic()
+                # Собираем мозаику из «чистых» кадров
+                filtered_mosaic = collection.mosaic()
 
-                # Опционально: применяем ресемплинг уже к итоговой мозаике
-                # (многие обходятся без этого; можно закомментировать, если не критично)
-                mosaic = mosaic.resample("bilinear")
+                # Ресемплинг уже к итоговой мозаике (опционально)
+                filtered_mosaic = filtered_mosaic.resample("bilinear")
 
-                # Получаем MapID для визуализации (B4,B3,B2, диапазон 0–3000)
                 tile_info = ee.data.getMapId({
-                    "image": mosaic,
+                    "image": filtered_mosaic,
                     "bands": ["B4", "B3", "B2"],
                     "min": [0, 0, 0],
                     "max": [3000, 3000, 3000]
                 })
+
                 clean_mapid = tile_info["mapid"].split("/")[-1]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
@@ -161,7 +153,6 @@ def update_sheet(sheets_client):
                 })
 
             except Exception as e:
-                # Если что‐то пошло не так — логируем и пишем короткую ошибку в ячейку
                 log_error(f"Строка {row_idx}", e)
                 short_err = f"Ошибка: {str(e)[:100]}"
                 cell_updates.append({
@@ -169,7 +160,7 @@ def update_sheet(sheets_client):
                     'values': [[short_err]]
                 })
 
-        # Если есть накопленные обновления — отправляем одним batch‐запросом
+        # Отправляем все обновления одним batch_update
         if cell_updates:
             body = {
                 'valueInputOption': "USER_ENTERED",
