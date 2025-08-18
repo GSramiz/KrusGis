@@ -80,7 +80,7 @@ def mask_clouds(img):
     allowed = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
     return img.updateMask(allowed).resample("bilinear")
 
-def update_sheet(sheets_client):
+def update_sheet(sheets_client, batch_size=50):
     try:
         print("Обновление таблицы")
 
@@ -88,12 +88,13 @@ def update_sheet(sheets_client):
         worksheet = spreadsheet.worksheet(SHEET_NAME)
         data = worksheet.get_all_values()
 
-        updates = []  # список (row_idx, value)
+        values_to_update = []
 
         for row_idx, row in enumerate(data[1:], start=2):
             try:
                 region, date_str = row[:2]
                 if not region or not date_str:
+                    values_to_update.append([""])
                     continue
 
                 parts = date_str.strip().split()
@@ -118,12 +119,11 @@ def update_sheet(sheets_client):
                     .map(mask_clouds)
                 )
 
-                # Быстрая проверка наличия снимков через .first()
                 if collection.first().getInfo() is None:
-                    updates.append((row_idx, "Нет снимков"))
+                    values_to_update.append(["Нет снимков"])
                     continue
 
-                filtered_mosaic = collection.median()  # вместо mosaic для стабильности
+                filtered_mosaic = collection.median()
 
                 tile_info = retry(ee.data.getMapId, {
                     "image": filtered_mosaic,
@@ -135,15 +135,25 @@ def update_sheet(sheets_client):
                 clean_mapid = tile_info["mapid"].split("/")[-1]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
-                updates.append((row_idx, xyz))
+                values_to_update.append([xyz])
 
             except Exception as e:
                 log_error(f"Строка {row_idx}", e)
-                updates.append((row_idx, f"Ошибка: {str(e)[:100]}"))
+                values_to_update.append([f"Ошибка: {str(e)[:100]}"])
 
-        # Пакетное обновление таблицы
-        for row_idx, value in updates:
-            retry(worksheet.update_cell, row_idx, 3, value)
+            # Пакетное обновление каждые batch_size строк
+            if len(values_to_update) >= batch_size:
+                start_row = row_idx - len(values_to_update) + 1
+                retry(worksheet.update, f'C{start_row}:C{row_idx}', values_to_update)
+                values_to_update = []
+                time.sleep(1)  # пауза между батчами
+
+        # Обновление оставшихся строк
+        if values_to_update:
+            start_row = len(data) - len(values_to_update) + 1
+            end_row = len(data)
+            retry(worksheet.update, f'C{start_row}:C{end_row}', values_to_update)
+            time.sleep(1)  # пауза после последнего батча
 
     except Exception as e:
         log_error("update_sheet", e)
