@@ -4,6 +4,8 @@ import json
 import os
 import traceback
 import calendar
+import time
+import random
 from oauth2client.service_account import ServiceAccountCredentials
 
 # Конфигурация
@@ -16,6 +18,19 @@ def log_error(context, error):
     print(f"Сообщение: {str(error)}")
     traceback.print_exc()
     print("=" * 50)
+
+def retry(func, *args, retries=5, **kwargs):
+    """Обёртка для повторных попыток при APIError 500"""
+    for i in range(retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if i < retries - 1:
+                wait = (2 ** i) + random.uniform(0, 1)
+                print(f"⚠️ Ошибка {e}, повтор через {wait:.1f} сек...")
+                time.sleep(wait)
+                continue
+            raise
 
 def initialize_services():
     try:
@@ -73,6 +88,8 @@ def update_sheet(sheets_client):
         worksheet = spreadsheet.worksheet(SHEET_NAME)
         data = worksheet.get_all_values()
 
+        updates = []  # список (row_idx, value)
+
         for row_idx, row in enumerate(data[1:], start=2):
             try:
                 region, date_str = row[:2]
@@ -94,36 +111,39 @@ def update_sheet(sheets_client):
                 geometry = get_geometry_from_asset(region)
 
                 collection = (
-                ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-                .filterDate(start, end_str)
-                .filterBounds(geometry)
-                .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
-                .map(mask_clouds)
-)
-                
+                    ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+                    .filterDate(start, end_str)
+                    .filterBounds(geometry)
+                    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
+                    .map(mask_clouds)
+                )
+
                 # Быстрая проверка наличия снимков через .first()
                 if collection.first().getInfo() is None:
-                    worksheet.update_cell(row_idx, 3, "Нет снимков")
+                    updates.append((row_idx, "Нет снимков"))
                     continue
 
-                filtered_mosaic = collection.mosaic()
+                filtered_mosaic = collection.median()  # вместо mosaic для стабильности
 
-               
-                tile_info = ee.data.getMapId({
-                "image": filtered_mosaic,
-                "bands": ["B4", "B3", "B2"],
-                "min": "0,0,0",
-                "max": "3000,3000,3000"
-})
+                tile_info = retry(ee.data.getMapId, {
+                    "image": filtered_mosaic,
+                    "bands": ["B4", "B3", "B2"],
+                    "min": "0,0,0",
+                    "max": "3000,3000,3000"
+                })
 
                 clean_mapid = tile_info["mapid"].split("/")[-1]
                 xyz = f"https://earthengine.googleapis.com/v1/projects/ee-romantik1994/maps/{clean_mapid}/tiles/{{z}}/{{x}}/{{y}}"
 
-                worksheet.update_cell(row_idx, 3, xyz)
+                updates.append((row_idx, xyz))
 
             except Exception as e:
                 log_error(f"Строка {row_idx}", e)
-                worksheet.update_cell(row_idx, 3, f"Ошибка: {str(e)[:100]}")
+                updates.append((row_idx, f"Ошибка: {str(e)[:100]}"))
+
+        # Пакетное обновление таблицы
+        for row_idx, value in updates:
+            retry(worksheet.update_cell, row_idx, 3, value)
 
     except Exception as e:
         log_error("update_sheet", e)
