@@ -153,7 +153,7 @@ def update_sheet(sheets_client, batch_size=50):
             start_row = len(data) - len(values_to_update) + 1
             end_row = len(data)
             retry(worksheet.update, f'C{start_row}:C{end_row}', values_to_update)
-            time.sleep(1)  # пауза после последнего батча
+            time.sleep(1)  # пауза
 
     except Exception as e:
         log_error("update_sheet", e)
